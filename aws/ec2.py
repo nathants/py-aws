@@ -14,21 +14,48 @@ def _ec2():
 
 
 def _tags(instance):
-    return {x['Key']: x['Value'] for x in instance.tags}
+    return {x['Key']: x['Value'] for x in (instance.tags or {})}
 
 
-def _ls(*tags, state='running'):
-    filters = [{'Name': 'tag:%s' % name, 'Values': [value]}
-               for tag in tags
-               for name, value in [tag.split('=')]]
-    if state != 'all':
-        filters += [{'Name': 'instance-state-name', 'Values': [state]}]
-    return _ec2().instances.filter(Filters=filters)
+def _ls(tags, state='running'):
+    filters = [{'Name': 'instance-state-name', 'Values': [state]}] if state != 'all' else []
+    instances = _ec2().instances.filter(Filters=filters)
+    return [i for i in instances if _matches(i, tags)]
 
 
-def ls(*tags, state='running'):
-    for i in _ls(*tags, state=state):
-        print(_tags(i)['Name'], i.instance_id, i.state['Name'])
+def _matches(instance, tags):
+    for tag in tags:
+        assert '=' in tag, 'tags are specified as "<key>=<value>", not: %s' % tag
+        k, v = tag.split('=')
+        t = _tags(instance).get(k, '')
+        if v[0] == v[-1] == '*':
+            if v.strip('*') not in t:
+                return False
+        elif v[0] == '*':
+            if not t.endswith(v.strip('*')):
+                return False
+        elif v[-1] == '*':
+            if not t.startswith(v.strip('*')):
+                return False
+        else:
+            if t != v:
+                return False
+    return True
+
+
+def _print(instance):
+    print(s.colors.green(_name(instance)),
+          s.colors.yellow(instance.instance_id),
+          s.colors.cyan(instance.state['Name']),
+          ' '.join('%s=%s' % (k, v) for k, v in _tags(instance).items() if k != 'Name' and v))
+
+def _name(instance):
+    return _tags(instance).get('Name', '<no-name>')
+
+
+def ls(*tags, state: 'running|stopped|<aws-state-name>|all'='all'):
+    for i in sorted(_ls(tags, state=state), key=_name):
+        _print(i)
 
 
 def _has_wildcard_permission(sg, ip):

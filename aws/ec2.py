@@ -17,10 +17,22 @@ def _tags(instance):
     return {x['Key']: x['Value'] for x in (instance.tags or {})}
 
 
-def _ls(tags, state='running'):
+def _ls(tags, state='running', first_n=None, last_n=None):
     filters = [{'Name': 'instance-state-name', 'Values': [state]}] if state != 'all' else []
-    instances = _ec2().instances.filter(Filters=filters)
-    return [i for i in instances if _matches(i, tags)]
+    if any('*' in tag for tag in tags):
+        instances = _ec2().instances.filter(Filters=filters)
+        instances = [i for i in instances if _matches(i, tags)]
+    else:
+        filters += [{'Name': 'tag:%s' % name, 'Values': [value]}
+                    for tag in tags
+                    for name, value in [tag.split('=')]]
+        instances = _ec2().instances.filter(Filters=filters)
+    instances = sorted(instances, key=_name_group)
+    if first_n:
+        instances = instances[:int(first_n)]
+    elif last_n:
+        instances = instances[-int(last_n):]
+    return instances
 
 
 def _matches(instance, tags):
@@ -43,19 +55,63 @@ def _matches(instance, tags):
     return True
 
 
-def _print(instance):
-    print(s.colors.green(_name(instance)),
-          s.colors.yellow(instance.instance_id),
-          s.colors.cyan(instance.state['Name']),
-          ' '.join('%s=%s' % (k, v) for k, v in _tags(instance).items() if k != 'Name' and v))
+def _pretty(instance):
+    return ' '.join([
+        s.colors.green(_name(instance)),
+        s.colors.yellow(instance.instance_id),
+        s.colors.cyan(instance.state['Name']),
+        s.colors.blue(instance.public_dns_name or '<no-ip>'),
+        ' '.join('%s=%s' % (k, v) for k, v in _tags(instance).items() if k != 'Name' and v),
+    ])
 
 def _name(instance):
     return _tags(instance).get('Name', '<no-name>')
 
 
-def ls(*tags, state: 'running|stopped|<aws-state-name>|all'='all'):
-    for i in sorted(_ls(tags, state=state), key=_name):
-        _print(i)
+def _name_group(instance):
+    return '%s:%s' % (_tags(instance).get('Name', '<no-name>'), instance.instance_id)
+
+
+def ips(*tags, first_n=None, last_n=None):
+    for i in _ls(tags, 'running', first_n, last_n):
+        print(i.public_dns_name)
+
+
+def ls(*tags, state='all', first_n=None, last_n=None):
+    for i in _ls(tags, state, first_n, last_n):
+        print(_pretty(i))
+
+
+def stop(*tags, yes=False, first_n=None, last_n=None):
+    assert tags, 'you cannot stop all things, specify some tags'
+    instances = _ls(tags, 'running', first_n, last_n)
+    assert instances, 'didnt find any running instances for those tags'
+    print('going to stop the following instances:\n')
+    for i in instances:
+        print('', _pretty(i))
+    print('\nwould you like to proceed? y/n\n')
+    if not (yes or pager.getch() == 'y'):
+        print('abort')
+        sys.exit(1)
+    for i in instances:
+        i.stop()
+        print('stopped:', _pretty(i))
+
+
+def start(*tags, yes=False, first_n=None, last_n=None):
+    assert tags, 'you cannot start all things, specify some tags'
+    instances = _ls(tags, 'stopped', first_n, last_n)
+    assert instances, 'didnt find any stopped instances for those tags'
+    print('going to start the following instances:\n')
+    for i in instances:
+        print('', _pretty(i))
+    print('\nwould you like to proceed? y/n\n')
+    if not (yes or pager.getch() == 'y'):
+        print('abort')
+        sys.exit(1)
+    for i in instances:
+        i.start()
+        print('started:', _pretty(i))
 
 
 def _has_wildcard_permission(sg, ip):
@@ -128,4 +184,8 @@ def revoke(ip, yes=False):
 
 
 def main():
-    shell.dispatch_commands(globals(), __name__)
+    try:
+        shell.dispatch_commands(globals(), __name__)
+    except AssertionError as e:
+        print(s.colors.red(e.args[0]))
+        sys.exit(1)

@@ -41,6 +41,8 @@ def authorize(ip, yes=False):
     if not (yes or pager.getch() == 'y'):
         print('abort')
         sys.exit(1)
+    with open(os.path.expanduser('~/ec2_auths.log', 'a')) as f:
+        f.write(ip + '\n')
     for sg in sgs:
         for proto in ['tcp', 'udp']:
             try:
@@ -57,7 +59,7 @@ def authorize(ip, yes=False):
 
 
 def revoke(ip, yes=False):
-    sgs = _ec2().security_groups.all()
+    sgs = _wildcard_security_groups(ip)
     print('your ip %s is currently wildcarded to the following security groups:\n' % s.colors.yellow(ip))
     for sg in sgs:
         print('', '%s [%s]' % (sg.group_name, sg.group_id))

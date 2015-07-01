@@ -13,6 +13,24 @@ def _ec2():
     return boto3.resource('ec2')
 
 
+def _tags(instance):
+    return {x['Key']: x['Value'] for x in instance.tags}
+
+
+def _ls(*tags, state='running'):
+    filters = [{'Name': 'tag:%s' % name, 'Values': [value]}
+               for tag in tags
+               for name, value in [tag.split('=')]]
+    if state != 'all':
+        filters += [{'Name': 'instance-state-name', 'Values': [state]}]
+    return _ec2().instances.filter(Filters=filters)
+
+
+def ls(*tags, state='running'):
+    for i in _ls(*tags, state=state):
+        print(_tags(i)['Name'], i.instance_id, i.state['Name'])
+
+
 def _has_wildcard_permission(sg, ip):
     assert '/' not in ip
     for sg_perm in sg.ip_permissions:
@@ -41,7 +59,7 @@ def authorize(ip, yes=False):
     if not (yes or pager.getch() == 'y'):
         print('abort')
         sys.exit(1)
-    with open(os.path.expanduser('~/ec2_auths.log', 'a')) as f:
+    with open('/var/log/ec2_auth_ips.log', 'a') as f:
         f.write(ip + '\n')
     for sg in sgs:
         for proto in ['tcp', 'udp']:

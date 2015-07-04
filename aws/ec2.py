@@ -18,6 +18,8 @@ def _tags(instance):
 
 
 def _ls(tags, state='running', first_n=None, last_n=None):
+    if tags and '=' not in tags[0]:
+        tags = ('Name=%s' % tags[0],) + tags[1:]
     filters = [{'Name': 'instance-state-name', 'Values': [state]}] if state != 'all' else []
     if any('*' in tag for tag in tags):
         instances = _ec2().instances.filter(Filters=filters)
@@ -60,7 +62,9 @@ def _pretty(instance):
         s.colors.green(_name(instance)),
         s.colors.yellow(instance.instance_id),
         s.colors.cyan(instance.state['Name']),
+        ' '.join([s.colors.red(x['GroupName']) for x in instance.security_groups]),
         s.colors.blue(instance.public_dns_name or '<no-ip>'),
+        s.colors.magenta(instance.private_dns_name or '<no-ip>'),
         ' '.join('%s=%s' % (k, v) for k, v in _tags(instance).items() if k != 'Name' and v),
     ])
 
@@ -133,9 +137,11 @@ def auths(ip):
         yield '%s [%s]' % (sg.group_name, sg.group_id)
 
 
-def authorize(ip, yes=False):
+def authorize(ip, *names, yes=False):
     sgs = _ec2().security_groups.all()
     print('going to authorize your ip %s to these groups:' % s.colors.yellow(ip))
+    if names:
+        sgs = [x for x in sgs if x.group_name in names]
     for sg in sgs:
         print('', '%s [%s]' % (sg.group_name, sg.group_id))
     print('\nwould you like to authorize access to these groups for your ip %s? y/n\n' % s.colors.yellow(ip))

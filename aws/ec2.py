@@ -134,11 +134,18 @@ def _wildcard_security_groups(ip):
 
 def auths(ip):
     for sg in _wildcard_security_groups(ip):
-        yield '%s [%s]' % (sg.group_name, sg.group_id)
+        yield '%s [%s]' % (s.colors.green(sg.group_name), sg.group_id)
+
+
+def _sgs(names):
+    sgs = _ec2().security_groups.all()
+    if names:
+        sgs = [x for x in sgs if x.group_name in names]
+    return sgs
 
 
 def authorize(ip, *names, yes=False):
-    sgs = _ec2().security_groups.all()
+    sgs = _sgs(names)
     print('going to authorize your ip %s to these groups:' % s.colors.yellow(ip))
     if names:
         sgs = [x for x in sgs if x.group_name in names]
@@ -165,8 +172,8 @@ def authorize(ip, *names, yes=False):
             print(proto)
 
 
-def revoke(ip, yes=False):
-    sgs = _wildcard_security_groups(ip)
+def revoke(ip, *names, yes=False):
+    sgs = _sgs(names)
     print('your ip %s is currently wildcarded to the following security groups:\n' % s.colors.yellow(ip))
     for sg in sgs:
         print('', '%s [%s]' % (sg.group_name, sg.group_id))

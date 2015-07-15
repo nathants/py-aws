@@ -60,12 +60,13 @@ def _matches(instance, tags):
 def _pretty(instance):
     return ' '.join([
         s.colors.green(_name(instance)),
-        s.colors.yellow(instance.instance_id),
-        s.colors.cyan(instance.state['Name']),
-        ' '.join([s.colors.red(x['GroupName']) for x in instance.security_groups]),
-        s.colors.blue(instance.public_dns_name or '<no-ip>'),
-        s.colors.magenta(instance.private_dns_name or '<no-ip>'),
-        ' '.join('%s=%s' % (k, v) for k, v in _tags(instance).items() if k != 'Name' and v),
+        instance.instance_id,
+        instance.instance_type,
+        instance.state['Name'],
+        ','.join([x['GroupName'] for x in instance.security_groups]),
+        instance.public_dns_name or '<no-ip>',
+        instance.private_dns_name or '<no-ip>',
+        ','.join('%s=%s' % (k, v) for k, v in _tags(instance).items() if k != 'Name' and v),
     ])
 
 def _name(instance):
@@ -84,6 +85,16 @@ def ips(*tags, first_n=None, last_n=None):
 def ls(*tags, state='all', first_n=None, last_n=None):
     for i in _ls(tags, state, first_n, last_n):
         print(_pretty(i))
+
+
+def ssh(*tags, first_n=None, last_n=None):
+    instances = _ls(tags, 'running', first_n, last_n)
+    assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    print(_pretty(instances[0]))
+    try:
+        shell.run('ssh -A ubuntu@%s' % instances[0].public_dns_name, interactive=True)
+    except:
+        sys.exit(1)
 
 
 def stop(*tags, yes=False, first_n=None, last_n=None):
@@ -194,7 +205,6 @@ def revoke(ip, *names, yes=False):
             except Exception as e:
                 print(re.sub(r'.*\((.*)\).*', r'\1', str(e)) + ':', sg.group_name, sg.group_id, end=' ')
             print(proto)
-
 
 def main():
     try:

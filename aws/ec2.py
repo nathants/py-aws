@@ -58,8 +58,9 @@ def _matches(instance, tags):
 
 
 def _pretty(instance):
+    color = s.colors.green if instance.state['Name'] == 'running' else s.colors.red
     return ' '.join([
-        s.colors.green(_name(instance)),
+        color(_name(instance)),
         instance.instance_id,
         instance.instance_type,
         instance.state['Name'],
@@ -93,6 +94,44 @@ def ssh(*tags, first_n=None, last_n=None):
     print(_pretty(instances[0]))
     try:
         shell.run('ssh -A ubuntu@%s' % instances[0].public_dns_name, interactive=True)
+    except:
+        sys.exit(1)
+
+def push(src, dst, *tags, first_n=None, last_n=None):
+    instances = _ls(tags, 'running', first_n, last_n)
+    assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    print(_pretty(instances[0]))
+    try:
+        shell.run('scp -r %s ubuntu@%s:%s' % (src, instances[0].public_dns_name, dst), interactive=True)
+    except:
+        sys.exit(1)
+
+
+def pull(src, dst, *tags, first_n=None, last_n=None):
+    instances = _ls(tags, 'running', first_n, last_n)
+    assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    print(_pretty(instances[0]))
+    try:
+        shell.run('scp -r ubuntu@%s:%s %s' % (instances[0].public_dns_name, src, dst), interactive=True)
+    except:
+        sys.exit(1)
+
+
+def emacs(path, *tags, first_n=None, last_n=None):
+    instances = _ls(tags, 'running', first_n, last_n)
+    assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    print(_pretty(instances[0]))
+    try:
+        shell.run("nohup emacsclient /ubuntu@{}:{} > /dev/null &".format(instances[0].public_dns_name, path), interactive=True)
+    except:
+        sys.exit(1)
+
+def mosh(*tags, first_n=None, last_n=None):
+    instances = _ls(tags, 'running', first_n, last_n)
+    assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    print(_pretty(instances[0]))
+    try:
+        shell.run('mosh ubuntu@%s' % instances[0].public_dns_name, interactive=True)
     except:
         sys.exit(1)
 

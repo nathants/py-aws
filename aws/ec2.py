@@ -1,4 +1,5 @@
 import s.cached
+import time
 import re
 import s.colors
 import pager
@@ -8,6 +9,13 @@ import shell
 import boto3
 
 
+def _align(text):
+    rows = list(map(str.split, text.splitlines()))
+    sizes = [max(map(len, row)) for row in zip(*rows)]
+    rows = [[col.ljust(size) for size, col in zip(sizes, cols)] for cols in rows]
+    return '\n'.join(map(' '.join, rows))
+
+
 @s.cached.func
 def _ec2():
     return boto3.resource('ec2')
@@ -15,6 +23,10 @@ def _ec2():
 
 def _tags(instance):
     return {x['Key']: x['Value'] for x in (instance.tags or {})}
+
+
+def _ls_by_ids(*ids):
+    return _ec2().instances.filter(Filters=[{'Name': 'instance-id', 'Values': ids}])
 
 
 def _ls(tags, state='running', first_n=None, last_n=None):
@@ -58,7 +70,12 @@ def _matches(instance, tags):
 
 
 def _pretty(instance):
-    color = s.colors.green if instance.state['Name'] == 'running' else s.colors.red
+    if instance.state['Name'] == 'running':
+        color = s.colors.green
+    elif instance.state['Name'] == 'pending':
+        color = s.colors.cyan
+    else:
+        color = s.colors.red
     return ' '.join([
         color(_name(instance)),
         instance.instance_id,
@@ -84,8 +101,11 @@ def ips(*tags, first_n=None, last_n=None):
 
 
 def ls(*tags, state='all', first_n=None, last_n=None):
-    for i in _ls(tags, state, first_n, last_n):
-        print(_pretty(i))
+    x = _ls(tags, state, first_n, last_n)
+    x = map(_pretty, x)
+    x = '\n'.join(x)
+    x = _align(x)
+    print(x)
 
 
 def ssh(*tags, first_n=None, last_n=None):
@@ -140,32 +160,53 @@ def stop(*tags, yes=False, first_n=None, last_n=None):
     assert tags, 'you cannot stop all things, specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert instances, 'didnt find any running instances for those tags'
-    print('going to stop the following instances:\n')
+    print('going to stop the following instances:')
     for i in instances:
         print('', _pretty(i))
-    print('\nwould you like to proceed? y/n\n')
-    if not (yes or pager.getch() == 'y'):
-        print('abort')
-        sys.exit(1)
+    if not yes:
+        print('\nwould you like to proceed? y/n\n')
+        if pager.getch() != 'y':
+            print('abort')
+            sys.exit(1)
     for i in instances:
         i.stop()
         print('stopped:', _pretty(i))
 
 
-def start(*tags, yes=False, first_n=None, last_n=None):
+def _wait_for_ip(*ids):
+    while True:
+        instances = _ls_by_ids(*ids)
+        if all(i.public_dns_name for i in instances):
+            return [i.public_dns_name for i in instances]
+        for i in instances:
+            print('waiting for:', end=' ')
+            if not i.public_dns_name:
+                print(_name(i), end=' ')
+            print('')
+        time.sleep(2)
+
+
+def start(*tags, yes=False, first_n=None, last_n=None, ssh=False):
     assert tags, 'you cannot start all things, specify some tags'
     instances = _ls(tags, 'stopped', first_n, last_n)
     assert instances, 'didnt find any stopped instances for those tags'
-    print('going to start the following instances:\n')
+    print('going to start the following instances:')
     for i in instances:
         print('', _pretty(i))
-    print('\nwould you like to proceed? y/n\n')
-    if not (yes or pager.getch() == 'y'):
-        print('abort')
-        sys.exit(1)
+    if not yes:
+        print('\nwould you like to proceed? y/n\n')
+        if pager.getch() != 'y':
+            print('abort')
+            sys.exit(1)
     for i in instances:
         i.start()
         print('started:', _pretty(i))
+    if ssh:
+        assert len(instances) == 1, s.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
+        try:
+            shell.run('ssh -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], interactive=True, echo=True)
+        except:
+            sys.exit(1)
 
 
 def _has_wildcard_permission(sg, ip):
@@ -201,10 +242,11 @@ def authorize(ip, *names, yes=False):
         sgs = [x for x in sgs if x.group_name in names]
     for sg in sgs:
         print('', '%s [%s]' % (sg.group_name, sg.group_id))
-    print('\nwould you like to authorize access to these groups for your ip %s? y/n\n' % s.colors.yellow(ip))
-    if not (yes or pager.getch() == 'y'):
-        print('abort')
-        sys.exit(1)
+    if not yes:
+        print('\nwould you like to authorize access to these groups for your ip %s? y/n\n' % s.colors.yellow(ip))
+        if pager.getch() != 'y':
+            print('abort')
+            sys.exit(1)
     with open('/var/log/ec2_auth_ips.log', 'a') as f:
         f.write(ip + '\n')
     for sg in sgs:
@@ -227,10 +269,11 @@ def revoke(ip, *names, yes=False):
     print('your ip %s is currently wildcarded to the following security groups:\n' % s.colors.yellow(ip))
     for sg in sgs:
         print('', '%s [%s]' % (sg.group_name, sg.group_id))
-    print('\nwould you like to revoke access to these groups for your ip %s? y/n\n' % s.colors.yellow(ip))
-    if not (yes or pager.getch() == 'y'):
-        print('abort')
-        sys.exit(1)
+    if not yes:
+        print('\nwould you like to revoke access to these groups for your ip %s? y/n\n' % s.colors.yellow(ip))
+        if pager.getch() != 'y':
+            print('abort')
+            sys.exit(1)
     for sg in sgs:
         for proto in ['tcp', 'udp']:
             try:

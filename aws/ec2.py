@@ -53,7 +53,8 @@ def _matches(instance, tags):
     for tag in tags:
         assert '=' in tag, 'tags are specified as "<key>=<value>", not: %s' % tag
         k, v = tag.split('=')
-        t = _tags(instance).get(k, '')
+        t = _tags(instance).get(k, '').lower()
+        v = v.lower()
         if v[0] == v[-1] == '*':
             if v.strip('*') not in t:
                 return False
@@ -236,6 +237,7 @@ def _sgs(names):
 
 
 def authorize(ip, *names, yes=False):
+    assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
     sgs = _sgs(names)
     print('going to authorize your ip %s to these groups:' % s.colors.yellow(ip))
     if names:
@@ -265,7 +267,9 @@ def authorize(ip, *names, yes=False):
 
 
 def revoke(ip, *names, yes=False):
-    sgs = _sgs(names)
+    assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
+    sgs = _sgs(names) if names else _wildcard_security_groups(ip)
+    assert sgs ,'didnt find any security groups'
     print('your ip %s is currently wildcarded to the following security groups:\n' % s.colors.yellow(ip))
     for sg in sgs:
         print('', '%s [%s]' % (sg.group_name, sg.group_id))
@@ -290,7 +294,11 @@ def revoke(ip, *names, yes=False):
 
 def main():
     try:
-        shell.dispatch_commands(globals(), __name__)
+        if s.hacks.override('--stream'):
+            with shell.set_stream():
+                shell.dispatch_commands(globals(), __name__)
+        else:
+            shell.dispatch_commands(globals(), __name__)
     except AssertionError as e:
         print(s.colors.red(e.args[0]))
         sys.exit(1)

@@ -1,4 +1,6 @@
 import s.cached
+import s.iter
+import s.strings
 import time
 import re
 import s.colors
@@ -110,6 +112,7 @@ def ls(*tags, state='all', first_n=None, last_n=None):
 
 
 def ssh(*tags, first_n=None, last_n=None):
+    assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     print(_pretty(instances[0]))
@@ -119,6 +122,7 @@ def ssh(*tags, first_n=None, last_n=None):
         sys.exit(1)
 
 def push(src, dst, *tags, first_n=None, last_n=None):
+    assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     print(_pretty(instances[0]))
@@ -129,6 +133,7 @@ def push(src, dst, *tags, first_n=None, last_n=None):
 
 
 def pull(src, dst, *tags, first_n=None, last_n=None):
+    assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     print(_pretty(instances[0]))
@@ -139,6 +144,7 @@ def pull(src, dst, *tags, first_n=None, last_n=None):
 
 
 def emacs(path, *tags, first_n=None, last_n=None):
+    assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     print(_pretty(instances[0]))
@@ -148,6 +154,7 @@ def emacs(path, *tags, first_n=None, last_n=None):
         sys.exit(1)
 
 def mosh(*tags, first_n=None, last_n=None):
+    assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     print(_pretty(instances[0]))
@@ -221,15 +228,19 @@ def _has_wildcard_permission(sg, ip):
 
 
 def _wildcard_security_groups(ip):
-    return [sg for sg in _ec2().security_groups.all()
-            if _has_wildcard_permission(sg, ip)]
+    return [sg for sg in _sgs() if _has_wildcard_permission(sg, ip)]
+
+def sgs():
+    for sg in _sgs():
+        yield '%s [%s]' % (s.colors.green(sg.group_name), sg.group_id)
+
 
 def auths(ip):
     for sg in _wildcard_security_groups(ip):
         yield '%s [%s]' % (s.colors.green(sg.group_name), sg.group_id)
 
 
-def _sgs(names):
+def _sgs(names=None):
     sgs = _ec2().security_groups.all()
     if names:
         sgs = [x for x in sgs if x.group_name in names]
@@ -238,6 +249,7 @@ def _sgs(names):
 
 def authorize(ip, *names, yes=False):
     assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
+    names = [s.strings.rm_color(x) for x in names]
     sgs = _sgs(names)
     print('going to authorize your ip %s to these groups:' % s.colors.yellow(ip))
     if names:
@@ -269,7 +281,7 @@ def authorize(ip, *names, yes=False):
 def revoke(ip, *names, yes=False):
     assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
     sgs = _sgs(names) if names else _wildcard_security_groups(ip)
-    assert sgs ,'didnt find any security groups'
+    assert sgs, 'didnt find any security groups'
     print('your ip %s is currently wildcarded to the following security groups:\n' % s.colors.yellow(ip))
     for sg in sgs:
         print('', '%s [%s]' % (sg.group_name, sg.group_id))
@@ -291,6 +303,22 @@ def revoke(ip, *names, yes=False):
             except Exception as e:
                 print(re.sub(r'.*\((.*)\).*', r'\1', str(e)) + ':', sg.group_name, sg.group_id, end=' ')
             print(proto)
+
+
+def images(*name_fragments):
+    name_fragments = ('ubuntu/images/',) + name_fragments
+    images = list(_ec2().images.filter(Owners=['099720109477'],
+                                       Filters=[
+                                           {'Name': 'name',
+                                            'Values': ['*%s*' % '*'.join(name_fragments)]},
+                                           {'Name': 'architecture',
+                                            'Values': ['x86_64']},
+                                           {'Name': 'virtualization-type',
+                                            'Values': ['hvm']}]))
+    for name, xs in s.iter.groupby(images, key=lambda x: x.name.split('-')[:-1]):
+        image = sorted(xs, key=lambda x: x.creation_date)[-1]
+        print(s.colors.green(image.image_id), '-'.join(name))
+
 
 def main():
     try:

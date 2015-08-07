@@ -111,13 +111,14 @@ def ls(*tags, state='all', first_n=None, last_n=None):
     print(x)
 
 
-def ssh(*tags, first_n=None, last_n=None):
+def ssh(*tags, first_n=None, last_n=None, command=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     print(_pretty(instances[0]))
+    command = "'%s'" % command if command else ''
     try:
-        shell.run('ssh -A ubuntu@%s' % instances[0].public_dns_name, interactive=True)
+        shell.run('ssh -A ubuntu@%s' % instances[0].public_dns_name, command, interactive=True)
     except:
         sys.exit(1)
 
@@ -180,6 +181,21 @@ def stop(*tags, yes=False, first_n=None, last_n=None):
         i.stop()
         print('stopped:', _pretty(i))
 
+def rm(*tags, yes=False, first_n=None, last_n=None):
+    assert tags, 'you cannot stop all things, specify some tags'
+    instances = _ls(tags, 'running', first_n, last_n)
+    assert instances, 'didnt find any running instances for those tags'
+    print('going to terminate the following instances:')
+    for i in instances:
+        print('', _pretty(i))
+    if not yes:
+        print('\nwould you like to proceed? y/n\n')
+        if pager.getch() != 'y':
+            print('abort')
+            sys.exit(1)
+    for i in instances:
+        i.terminate()
+        print('terminated:', _pretty(i))
 
 def _wait_for_ip(*ids):
     while True:
@@ -318,6 +334,10 @@ def images(*name_fragments):
     for name, xs in s.iter.groupby(images, key=lambda x: x.name.split('-')[:-1]):
         image = sorted(xs, key=lambda x: x.creation_date)[-1]
         print(s.colors.green(image.image_id), '-'.join(name))
+
+
+def new(name):
+    pass
 
 
 def main():

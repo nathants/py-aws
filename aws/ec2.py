@@ -1,4 +1,5 @@
 import s.cached
+import os
 import s.iter
 import s.strings
 import time
@@ -122,26 +123,48 @@ def ssh(*tags, first_n=None, last_n=None, command=None):
     except:
         sys.exit(1)
 
-def push(src, dst, *tags, first_n=None, last_n=None):
+
+def _tar_script(src, name):
+    name = ('-name %s' % name) if name else ''
+    script = ('FILES=$(find %(src)s -type f %(name)s)\n'
+              'echo $FILES|tr " " "\\n" 1>&2\n'
+              'tar cf - $FILES') % locals()
+    with shell.tempdir(cleanup=False):
+        with open('script.sh', 'w') as f:
+            f.write(script)
+        return os.path.abspath('script.sh')
+
+
+def push(src, dst, *tags, first_n=None, last_n=None, name=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     print(_pretty(instances[0]))
+    host = instances[0].public_dns_name
+    script = _tar_script(src, name)
+    cmd = 'bash %(script)s | ssh ubuntu@%(host)s "cd %(dst)s && tar xf -"' % locals()
     try:
-        shell.run('scp -r %s ubuntu@%s:%s' % (src, instances[0].public_dns_name, dst), interactive=True)
+        shell.run(cmd, interactive=True)
     except:
         sys.exit(1)
+    finally:
+        shell.run('rm -rf', os.path.dirname(script))
 
 
-def pull(src, dst, *tags, first_n=None, last_n=None):
+def pull(src, dst, *tags, first_n=None, last_n=None, name=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     print(_pretty(instances[0]))
+    host = instances[0].public_dns_name
+    script = _tar_script(src, name)
+    cmd = 'cd %(dst)s && cat %(script)s | ssh ubuntu@%(host)s bash -s | tar xf -' % locals()
     try:
-        shell.run('scp -r ubuntu@%s:%s %s' % (instances[0].public_dns_name, src, dst), interactive=True)
+        shell.run(cmd, interactive=True)
     except:
         sys.exit(1)
+    finally:
+        shell.run('rm -rf', os.path.dirname(script))
 
 
 def emacs(path, *tags, first_n=None, last_n=None):

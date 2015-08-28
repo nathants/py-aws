@@ -126,9 +126,12 @@ def ssh(*tags, first_n=None, last_n=None, command=None):
 
 def _tar_script(src, name):
     name = ('-name %s' % name) if name else ''
-    script = ('FILES=$(find %(src)s -type f %(name)s)\n'
-              'echo $FILES|tr " " "\\n" 1>&2\n'
-              'tar cf - $FILES') % locals()
+    script = (
+        'cd $(dirname %(src)s)\n'
+        'FILES=$(find $(basename %(src)s) -type f %(name)s)\n'
+        'echo $FILES|tr " " "\\n" 1>&2\n'
+        'tar cf - $FILES'
+    ) % locals()
     with shell.tempdir(cleanup=False):
         with open('script.sh', 'w') as f:
             f.write(script)

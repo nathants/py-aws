@@ -258,6 +258,21 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False):
         except:
             sys.exit(1)
 
+def reboot(*tags, yes=False, first_n=None, last_n=None):
+    assert tags, 'you cannot reboot all things, specify some tags'
+    instances = _ls(tags, 'running', first_n, last_n)
+    assert instances, 'didnt find any stopped instances for those tags'
+    print('going to reboot the following instances:')
+    for i in instances:
+        print('', _pretty(i))
+    if not yes:
+        print('\nwould you like to proceed? y/n\n')
+        if pager.getch() != 'y':
+            print('abort')
+            sys.exit(1)
+    for i in instances:
+        i.reboot()
+        print('rebooted:', _pretty(i))
 
 def _has_wildcard_permission(sg, ip):
     assert '/' not in ip

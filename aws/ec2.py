@@ -99,7 +99,7 @@ def _name_group(instance):
     return '%s:%s' % (_tags(instance).get('Name', '<no-name>'), instance.instance_id)
 
 
-def ips(*tags, first_n=None, last_n=None):
+def ip(*tags, first_n=None, last_n=None):
     for i in _ls(tags, 'running', first_n, last_n):
         print(i.public_dns_name)
 

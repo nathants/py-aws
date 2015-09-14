@@ -88,7 +88,7 @@ def _pretty(instance):
         ','.join([x['GroupName'] for x in instance.security_groups]),
         instance.public_dns_name or '<no-ip>',
         instance.private_dns_name or '<no-ip>',
-        ','.join('%s=%s' % (k, v) for k, v in _tags(instance).items() if k != 'Name' and v),
+        ' '.join('%s=%s' % (k, v) for k, v in sorted(_tags(instance).items(), key=lambda x: x[0]) if k != 'Name' and v),
     ])
 
 def _name(instance):
@@ -257,6 +257,49 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False):
             shell.run('ssh -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], interactive=True, echo=True)
         except:
             sys.exit(1)
+
+
+def untag(ls_tags, unset_tags, yes=False, first_n=None, last_n=None):
+    assert '=' not in unset_tags, 'no "=", just the name of the tag to unset'
+    instances = _ls(tuple(ls_tags.split(',')), 'all', first_n, last_n)
+    assert instances, 'didnt find any stopped instances for those tags'
+    print('going to untag the following instances:')
+    for i in instances:
+        print('', _pretty(i))
+    print('with:')
+    for x in unset_tags.split(','):
+        print('', x)
+    if not yes:
+        print('\nwould you like to proceed? y/n\n')
+        if pager.getch() != 'y':
+            print('abort')
+            sys.exit(1)
+    for i in instances:
+        for t in unset_tags.split(','):
+            i.create_tags(Tags=[{'Key': t, 'Value': ''}])[0].delete()
+            print('untagged:', _pretty(i))
+
+
+def tag(ls_tags, set_tags, yes=False, first_n=None, last_n=None):
+    instances = _ls(tuple(ls_tags.split(',')), 'all', first_n, last_n)
+    assert instances, 'didnt find any stopped instances for those tags'
+    print('going to tag the following instances:')
+    for i in instances:
+        print('', _pretty(i))
+    print('with:')
+    for x in set_tags.split(','):
+        print('', x)
+    if not yes:
+        print('\nwould you like to proceed? y/n\n')
+        if pager.getch() != 'y':
+            print('abort')
+            sys.exit(1)
+    for i in instances:
+        for t in set_tags.split(','):
+            k, v = t.split('=')
+            i.create_tags(Tags=[{'Key': k, 'Value': v}])
+            print('tagged:', _pretty(i))
+
 
 def reboot(*tags, yes=False, first_n=None, last_n=None):
     assert tags, 'you cannot reboot all things, specify some tags'

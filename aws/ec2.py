@@ -1,4 +1,6 @@
 import s.cached
+import argh
+import shell.conf
 import datetime
 import os
 import s.iter
@@ -443,24 +445,41 @@ def _subnet(vpc):
     return subnets[0].id
 
 
-def new(name, type, ami, key, vpc, sg, num=1):
-    instances = _ec2().create_instances(
-        ImageId=ami,
-        MinCount=num,
-        MaxCount=num,
-        KeyName=key,
-        SecurityGroupIds=[x.id for x in _sgs(names=[sg])],
-        InstanceType=type,
-        SubnetId=_subnet(vpc),
-        BlockDeviceMappings=[{'DeviceName': '/dev/sda1',
-                              'Ebs': {'VolumeSize': int(23),
-                                      'DeleteOnTermination': True}}],
-    )
+def _blocks(gigs):
+    return [{'DeviceName': '/dev/sda1',
+             'Ebs': {'VolumeSize': int(gigs),
+             'DeleteOnTermination': True}}]
 
+
+_default_init = """#!/usr/bin/python
+import time
+open('/tmp/cloudinit.log', 'a').write('init %s' % time.time())
+"""
+
+@argh.arg('name',   help='name of the instance')
+@argh.arg('--key',  help='key pair name', default=shell.conf.get_or_prompt_pref('key', __file__, message='key pair name'))
+@argh.arg('--ami',  help='ami id', default=shell.conf.get_or_prompt_pref('ami', __file__, message='ami id'))
+@argh.arg('--sg',   help='security group name', default=shell.conf.get_or_prompt_pref('sg',  __file__, message='security group name'))
+@argh.arg('--type', help='instance type', default=shell.conf.get_or_prompt_pref('type',  __file__, message='instance type'))
+@argh.arg('--vpc',  help='vpc name', default=shell.conf.get_or_prompt_pref('vpc', __file__, message='vpc name'))
+@argh.arg('--gigs', help='gb capacity of primary disk', default=16)
+@argh.arg('--init', help='cloud init string', default=None)
+@argh.arg('--num',  help='number of instances', default=1)
+def new(**kw):
+    instances = _ec2().create_instances(UserData=kw['init'] or _default_init,
+                                        ImageId=kw['ami'],
+                                        MinCount=kw['num'],
+                                        MaxCount=kw['num'],
+                                        KeyName=kw['key'],
+                                        SecurityGroupIds=[x.id for x in _sgs(names=[kw['sg']])],
+                                        InstanceType=kw['type'],
+                                        SubnetId=_subnet(kw['vpc']),
+                                        BlockDeviceMappings=_blocks(kw['gigs']))
     date = str(datetime.datetime.now())
     for i, instance in enumerate(instances):
-        tags = [{'Key': 'Name', 'Value': name},
+        tags = [{'Key': 'Name', 'Value': kw['name']},
                 {'Key': 'nth', 'Value': str(i)},
+                {'Key': 'num', 'Value': kw['num']},
                 {'Key': 'creation-date', 'Value': date}]
         instance.create_tags(Tags=tags)
         print('tagged', instance.id, 'with', {x['Key']: x['Value'] for x in tags})

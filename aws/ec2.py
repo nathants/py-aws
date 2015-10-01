@@ -1,4 +1,5 @@
 import s.cached
+import datetime
 import os
 import s.iter
 import s.strings
@@ -124,11 +125,16 @@ def ssh(*tags, first_n=None, last_n=None, command=None):
         sys.exit(1)
 
 
+# TODO this is dumb, weird behavior targetting files vs directores.
+# just use rsync? or scp? or write some tests and nail down behavior?
+# stabile behavior for file vs director and push vs pull. it's all over the map.
 def _tar_script(src, name):
     name = ('-name %s' % name) if name else ''
     script = (
-        'cd $(dirname %(src)s)\n'
-        "FILES=$(find -L $(basename %(src)s) -type f %(name)s -o -type l %(name)s| grep -v '\.git')\n"
+        'cd %(src)s\n'
+        'src=$(pwd)\n'
+        'cd $(dirname $src)\n'
+        "FILES=$(find -L $(basename $src) -type f %(name)s -o -type l %(name)s| grep -v '\.git')\n"
         'echo $FILES|tr " " "\\n" 1>&2\n'
         'tar cfh - $FILES'
     ) % locals()
@@ -145,7 +151,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None):
     print(_pretty(instances[0]))
     host = instances[0].public_dns_name
     script = _tar_script(src, name)
-    cmd = 'bash %(script)s | ssh ubuntu@%(host)s "cd %(dst)s && tar xf -"' % locals()
+    cmd = 'bash %(script)s | ssh ubuntu@%(host)s "mkdir -p %(dst)s && cd %(dst)s && tar xf -"' % locals()
     try:
         shell.run(cmd, interactive=True)
     except:
@@ -405,23 +411,59 @@ def revoke(ip, *names, yes=False):
             print(proto)
 
 
-def images(*name_fragments):
+def amis(*name_fragments):
     name_fragments = ('ubuntu/images/',) + name_fragments
-    images = list(_ec2().images.filter(Owners=['099720109477'],
-                                       Filters=[
-                                           {'Name': 'name',
-                                            'Values': ['*%s*' % '*'.join(name_fragments)]},
-                                           {'Name': 'architecture',
-                                            'Values': ['x86_64']},
-                                           {'Name': 'virtualization-type',
-                                            'Values': ['hvm']}]))
-    for name, xs in s.iter.groupby(images, key=lambda x: x.name.split('-')[:-1]):
-        image = sorted(xs, key=lambda x: x.creation_date)[-1]
-        print(s.colors.green(image.image_id), '-'.join(name))
+    amis = list(_ec2().images.filter(Owners=['099720109477'],
+                                     Filters=[{'Name': 'name',
+                                               'Values': ['*%s*' % '*'.join(name_fragments)]},
+                                              {'Name': 'architecture',
+                                               'Values': ['x86_64']},
+                                              {'Name': 'virtualization-type',
+                                               'Values': ['hvm']}]))
+    for name, xs in s.iter.groupby(amis, key=lambda x: x.name.split('-')[:-1]):
+        ami = sorted(xs, key=lambda x: x.creation_date)[-1]
+        print(s.colors.green(ami.image_id), '-'.join(name))
 
 
-def new(name):
-    pass
+def keys():
+    for key in _ec2().key_pairs.all():
+        print(key.name)
+
+
+def vpcs():
+    for vpc in _ec2().vpcs.all():
+        print(_name(vpc), 'subnets:', *[x.id for x in vpc.subnets.all()])
+
+
+def _subnet(vpc):
+    vpcs = list(_ec2().vpcs.filter(Filters=[{'Name': 'tag:Name', 'Values': [vpc]}]))
+    assert len(vpcs) == 1, vpcs
+    subnets = list(vpcs[0].subnets.all())
+    assert len(subnets) == 1, subnets
+    return subnets[0].id
+
+
+def new(name, type, ami, key, vpc, sg, num=1):
+    instances = _ec2().create_instances(
+        ImageId=ami,
+        MinCount=num,
+        MaxCount=num,
+        KeyName=key,
+        SecurityGroupIds=[x.id for x in _sgs(names=[sg])],
+        InstanceType=type,
+        SubnetId=_subnet(vpc),
+        BlockDeviceMappings=[{'DeviceName': '/dev/sda1',
+                              'Ebs': {'VolumeSize': int(23),
+                                      'DeleteOnTermination': True}}],
+    )
+
+    date = str(datetime.datetime.now())
+    for i, instance in enumerate(instances):
+        tags = [{'Key': 'Name', 'Value': name},
+                {'Key': 'nth', 'Value': str(i)},
+                {'Key': 'creation-date', 'Value': date}]
+        instance.create_tags(Tags=tags)
+        print('tagged', instance.id, 'with', {x['Key']: x['Value'] for x in tags})
 
 
 def main():

@@ -1,18 +1,20 @@
-import s.cached
 import argh
-import shell.conf
+import boto3
 import datetime
 import os
+import pager
+import pool.thread
+import re
+import s.cached
+import s.colors
+import s.exceptions
 import s.iter
 import s.strings
-import time
-import re
-import s.colors
-import pager
-import sys
-import s.exceptions
 import shell
-import boto3
+import shell.conf
+import sys
+import time
+import time
 
 
 def _align(text):
@@ -115,16 +117,38 @@ def ls(*tags, state='all', first_n=None, last_n=None):
     print(x)
 
 
-def ssh(*tags, first_n=None, last_n=None, command=None):
+def ssh(*tags, first_n=None, last_n=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     print(_pretty(instances[0]))
-    command = "'%s'" % command if command else ''
+    cmd = 'ssh -A -o UserKnownHostsFile=/dev/null ubuntu@%s' % instances[0].public_dns_name
     try:
-        shell.run('ssh -A ubuntu@%s' % instances[0].public_dns_name, command, interactive=True)
+        if not sys.stdin.isatty():
+            shell.run(cmd, 'bash -s', plain=True, stream=True, stdin=sys.stdin.read())
+        else:
+            shell.run(cmd, plain=True, stream=True)
     except:
         sys.exit(1)
+
+
+def tail(path, *tags, yes=False):
+    assert tags, 'you must specify some tags'
+    instances = _ls(tags, 'running')
+    print('going to tail', path, 'on the following instances:')
+    for i in instances:
+        print('', _pretty(i))
+    if not yes:
+        print('\nwould you like to proceed? y/n\n')
+        if pager.getch() != 'y':
+            print('abort')
+            sys.exit(1)
+    threads = [pool.thread.new(shell.run, 'ssh -o UserKnownHostsFile=/dev/null ubuntu@%s tail -f %s' % (i.public_dns_name, path), stream=True)
+               for i in instances]
+    while True:
+        assert len(threads) == len(instances)
+        assert all([x.is_alive() for x in threads])
+        time.sleep(1)
 
 
 # TODO this is dumb, weird behavior targetting files vs directores.
@@ -155,7 +179,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None):
     script = _tar_script(src, name)
     cmd = 'bash %(script)s | ssh ubuntu@%(host)s "mkdir -p %(dst)s && cd %(dst)s && tar xf -"' % locals()
     try:
-        shell.run(cmd, interactive=True)
+        shell.run(cmd, plain=True)
     except:
         sys.exit(1)
     finally:
@@ -171,7 +195,7 @@ def pull(src, dst, *tags, first_n=None, last_n=None, name=None):
     script = _tar_script(src, name)
     cmd = 'cd %(dst)s && cat %(script)s | ssh ubuntu@%(host)s bash -s | tar xf -' % locals()
     try:
-        shell.run(cmd, interactive=True)
+        shell.run(cmd, plain=True)
     except:
         sys.exit(1)
     finally:
@@ -184,7 +208,7 @@ def emacs(path, *tags, first_n=None, last_n=None):
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     print(_pretty(instances[0]))
     try:
-        shell.run("nohup emacsclient /ubuntu@{}:{} > /dev/null &".format(instances[0].public_dns_name, path), interactive=True)
+        shell.run("nohup emacsclient /ubuntu@{}:{} > /dev/null &".format(instances[0].public_dns_name, path), plain=True)
     except:
         sys.exit(1)
 
@@ -194,7 +218,7 @@ def mosh(*tags, first_n=None, last_n=None):
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     print(_pretty(instances[0]))
     try:
-        shell.run('mosh ubuntu@%s' % instances[0].public_dns_name, interactive=True)
+        shell.run('mosh ubuntu@%s' % instances[0].public_dns_name, plain=True)
     except:
         sys.exit(1)
 
@@ -262,7 +286,7 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False):
     if ssh:
         assert len(instances) == 1, s.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         try:
-            shell.run('ssh -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], interactive=True, echo=True)
+            shell.run('ssh -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], plain=True, echo=True)
         except:
             sys.exit(1)
 

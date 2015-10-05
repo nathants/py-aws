@@ -10,7 +10,7 @@ setuptools.setup(
     author_email='me@nathants.com',
     url='http://github.com/nathants/py-aws',
     packages=setuptools.find_packages(),
-    # install_requires=open('requirements.txt').readlines(),
+    install_requires=open('requirements.txt').readlines(),
     entry_points={'console_scripts': [
         '{} = aws.{}:main'.format(
             x.replace('.py', '').replace('_', '-'),

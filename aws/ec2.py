@@ -143,9 +143,7 @@ def tail(path, *tags, yes=False):
         logging.info(' ' + _pretty(i))
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
-        if pager.getch() != 'y':
-            logging.info('abort')
-            sys.exit(1)
+        assert pager.getch() == 'y', 'abort'
     threads = [pool.thread.new(shell.run, 'ssh -o UserKnownHostsFile=/dev/null ubuntu@%s tail -f %s' % (i.public_dns_name, path), stream=True)
                for i in instances]
     while True:
@@ -235,9 +233,7 @@ def stop(*tags, yes=False, first_n=None, last_n=None):
         logging.info('', _pretty(i))
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
-        if pager.getch() != 'y':
-            logging.info('abort')
-            sys.exit(1)
+        assert pager.getch() == 'y', 'abort'
     for i in instances:
         i.stop()
         logging.info('stopped: %s', _pretty(i))
@@ -251,9 +247,7 @@ def rm(*tags, yes=False, first_n=None, last_n=None):
         logging.info(' ' + _pretty(i))
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
-        if pager.getch() != 'y':
-            logging.info('abort')
-            sys.exit(1)
+        assert pager.getch() == 'y', 'abort'
     for i in instances:
         i.terminate()
         logging.info('terminated: %s', _pretty(i))
@@ -278,9 +272,7 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False):
         logging.info(' ' + _pretty(i))
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
-        if pager.getch() != 'y':
-            logging.info('abort')
-            sys.exit(1)
+        assert pager.getch() == 'y', 'abort'
     for i in instances:
         i.start()
         logging.info('started: %s', _pretty(i))
@@ -304,9 +296,7 @@ def untag(ls_tags, unset_tags, yes=False, first_n=None, last_n=None):
         logging.info(' ' + x)
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
-        if pager.getch() != 'y':
-            logging.info('abort')
-            sys.exit(1)
+        assert pager.getch() == 'y', 'abort'
     for i in instances:
         for t in unset_tags.split(','):
             i.create_tags(Tags=[{'Key': t, 'Value': ''}])[0].delete()
@@ -324,9 +314,7 @@ def tag(ls_tags, set_tags, yes=False, first_n=None, last_n=None):
         logging.info(' ' + x)
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
-        if pager.getch() != 'y':
-            logging.info('abort')
-            sys.exit(1)
+        assert pager.getch() == 'y', 'abort'
     for i in instances:
         for t in set_tags.split(','):
             k, v = t.split('=')
@@ -343,9 +331,7 @@ def reboot(*tags, yes=False, first_n=None, last_n=None):
         logging.info(' ' + _pretty(i))
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
-        if pager.getch() != 'y':
-            logging.info('abort')
-            sys.exit(1)
+        assert pager.getch() == 'y', 'abort'
     for i in instances:
         i.reboot()
         logging.info('rebooted: %s', _pretty(i))
@@ -391,9 +377,7 @@ def authorize(ip, *names, yes=False):
         logging.info(' %s [%s]', sg.group_name, sg.group_id)
     if not yes:
         logging.info('\nwould you like to authorize access to these groups for your ip %s? y/n\n', s.colors.yellow(ip))
-        if pager.getch() != 'y':
-            logging.info('abort')
-            sys.exit(1)
+        assert pager.getch() == 'y', 'abort'
     with open('/var/log/ec2_auth_ips.log', 'a') as f:
         f.write(ip + '\n')
     for sg in sgs:
@@ -419,9 +403,7 @@ def revoke(ip, *names, yes=False):
         logging.info(' %s [%s]', sg.group_name, sg.group_id)
     if not yes:
         logging.info('\nwould you like to revoke access to these groups for your ip %s? y/n\n', s.colors.yellow(ip))
-        if pager.getch() != 'y':
-            logging.info('abort')
-            sys.exit(1)
+        assert pager.getch() == 'y', 'abort'
     for sg in sgs:
         for proto in ['tcp', 'udp']:
             try:
@@ -434,7 +416,6 @@ def revoke(ip, *names, yes=False):
                 logging.info('revoked: %s %s %s', sg.group_name, sg.group_id, proto)
             except Exception as e:
                 logging.info('%s: %s %s %s', re.sub(r'.*\((.*)\).*', r'\1', str(e)), sg.group_name, sg.group_id, proto)
-
 
 
 def amis(*name_fragments):

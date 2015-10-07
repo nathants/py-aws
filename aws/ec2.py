@@ -230,7 +230,7 @@ def stop(*tags, yes=False, first_n=None, last_n=None):
     assert instances, 'didnt find any running instances for those tags'
     logging.info('going to stop the following instances:')
     for i in instances:
-        logging.info('', _pretty(i))
+        logging.info(' ' + _pretty(i))
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'

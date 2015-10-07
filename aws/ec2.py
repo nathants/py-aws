@@ -472,7 +472,7 @@ def _subnet(vpc):
 def _blocks(gigs):
     return [{'DeviceName': '/dev/sda1',
              'Ebs': {'VolumeSize': int(gigs),
-             'DeleteOnTermination': True}}]
+                     'DeleteOnTermination': True}}]
 
 
 _default_init = """#!/usr/bin/python
@@ -480,15 +480,15 @@ import time
 open('/tmp/cloudinit.log', 'a').write('init %s' % time.time())
 """
 
-@argh.arg('name',   help='name of the instance')
-@argh.arg('--key',  help='key pair name', default=shell.conf.get_or_prompt_pref('key', __file__, message='key pair name'))
-@argh.arg('--ami',  help='ami id', default=shell.conf.get_or_prompt_pref('ami', __file__, message='ami id'))
-@argh.arg('--sg',   help='security group name', default=shell.conf.get_or_prompt_pref('sg',  __file__, message='security group name'))
-@argh.arg('--type', help='instance type', default=shell.conf.get_or_prompt_pref('type',  __file__, message='instance type'))
-@argh.arg('--vpc',  help='vpc name', default=shell.conf.get_or_prompt_pref('vpc', __file__, message='vpc name'))
+@argh.arg('name', help='name of the instance')
+@argh.arg('--key', help='key pair name', default=shell.conf.get_or_prompt_pref('key', __file__, message='key pair name'))
+@argh.arg('--ami', help='ami id', default=shell.conf.get_or_prompt_pref('ami', __file__, message='ami id'))
+@argh.arg('--sg', help='security group name', default=shell.conf.get_or_prompt_pref('sg', __file__, message='security group name'))
+@argh.arg('--type', help='instance type', default=shell.conf.get_or_prompt_pref('type', __file__, message='instance type'))
+@argh.arg('--vpc', help='vpc name', default=shell.conf.get_or_prompt_pref('vpc', __file__, message='vpc name'))
 @argh.arg('--gigs', help='gb capacity of primary disk', default=16)
 @argh.arg('--init', help='cloud init string', default=None)
-@argh.arg('--num',  help='number of instances', default=1)
+@argh.arg('--num', help='number of instances', default=1)
 def new(**kw):
     instances = _ec2().create_instances(UserData=kw['init'] or _default_init,
                                         ImageId=kw['ami'],

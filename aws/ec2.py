@@ -279,7 +279,7 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False):
     if ssh:
         assert len(instances) == 1, s.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         try:
-            shell.run('ssh -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], plain=True, echo=True)
+            shell.run('ssh -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], plain=True, stream=True, echo=True)
         except:
             sys.exit(1)
 

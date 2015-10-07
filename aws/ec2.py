@@ -1,4 +1,7 @@
 import argh
+import mock
+import s.log
+import logging
 import boto3
 import datetime
 import os
@@ -106,7 +109,7 @@ def _name_group(instance):
 
 def ip(*tags, first_n=None, last_n=None):
     for i in _ls(tags, 'running', first_n, last_n):
-        print(i.public_dns_name)
+        logging.info(i.public_dns_name)
 
 
 def ls(*tags, state='all', first_n=None, last_n=None):
@@ -114,14 +117,14 @@ def ls(*tags, state='all', first_n=None, last_n=None):
     x = map(_pretty, x)
     x = '\n'.join(x)
     x = _align(x)
-    print(x)
+    logging.info(x)
 
 
 def ssh(*tags, first_n=None, last_n=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
-    print(_pretty(instances[0]))
+    logging.info(_pretty(instances[0]))
     cmd = 'ssh -A -o UserKnownHostsFile=/dev/null ubuntu@%s' % instances[0].public_dns_name
     try:
         if not sys.stdin.isatty():
@@ -135,13 +138,13 @@ def ssh(*tags, first_n=None, last_n=None):
 def tail(path, *tags, yes=False):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running')
-    print('going to tail', path, 'on the following instances:')
+    logging.info('going to tail %s on the following instances:', path)
     for i in instances:
-        print('', _pretty(i))
+        logging.info(' ' + _pretty(i))
     if not yes:
-        print('\nwould you like to proceed? y/n\n')
+        logging.info('\nwould you like to proceed? y/n\n')
         if pager.getch() != 'y':
-            print('abort')
+            logging.info('abort')
             sys.exit(1)
     threads = [pool.thread.new(shell.run, 'ssh -o UserKnownHostsFile=/dev/null ubuntu@%s tail -f %s' % (i.public_dns_name, path), stream=True)
                for i in instances]
@@ -174,7 +177,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
-    print(_pretty(instances[0]))
+    logging.info(_pretty(instances[0]))
     host = instances[0].public_dns_name
     script = _tar_script(src, name)
     cmd = 'bash %(script)s | ssh ubuntu@%(host)s "mkdir -p %(dst)s && cd %(dst)s && tar xf -"' % locals()
@@ -190,7 +193,7 @@ def pull(src, dst, *tags, first_n=None, last_n=None, name=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
-    print(_pretty(instances[0]))
+    logging.info(_pretty(instances[0]))
     host = instances[0].public_dns_name
     script = _tar_script(src, name)
     cmd = 'cd %(dst)s && cat %(script)s | ssh ubuntu@%(host)s bash -s | tar xf -' % locals()
@@ -206,7 +209,7 @@ def emacs(path, *tags, first_n=None, last_n=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
-    print(_pretty(instances[0]))
+    logging.info(_pretty(instances[0]))
     try:
         shell.run("nohup emacsclient /ubuntu@{}:{} > /dev/null &".format(instances[0].public_dns_name, path), plain=True)
     except:
@@ -216,7 +219,7 @@ def mosh(*tags, first_n=None, last_n=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
-    print(_pretty(instances[0]))
+    logging.info(_pretty(instances[0]))
     try:
         shell.run('mosh ubuntu@%s' % instances[0].public_dns_name, plain=True)
     except:
@@ -227,33 +230,33 @@ def stop(*tags, yes=False, first_n=None, last_n=None):
     assert tags, 'you cannot stop all things, specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert instances, 'didnt find any running instances for those tags'
-    print('going to stop the following instances:')
+    logging.info('going to stop the following instances:')
     for i in instances:
-        print('', _pretty(i))
+        logging.info('', _pretty(i))
     if not yes:
-        print('\nwould you like to proceed? y/n\n')
+        logging.info('\nwould you like to proceed? y/n\n')
         if pager.getch() != 'y':
-            print('abort')
+            logging.info('abort')
             sys.exit(1)
     for i in instances:
         i.stop()
-        print('stopped:', _pretty(i))
+        logging.info('stopped: %s', _pretty(i))
 
 def rm(*tags, yes=False, first_n=None, last_n=None):
     assert tags, 'you cannot stop all things, specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert instances, 'didnt find any running instances for those tags'
-    print('going to terminate the following instances:')
+    logging.info('going to terminate the following instances:')
     for i in instances:
-        print('', _pretty(i))
+        logging.info(' ' + _pretty(i))
     if not yes:
-        print('\nwould you like to proceed? y/n\n')
+        logging.info('\nwould you like to proceed? y/n\n')
         if pager.getch() != 'y':
-            print('abort')
+            logging.info('abort')
             sys.exit(1)
     for i in instances:
         i.terminate()
-        print('terminated:', _pretty(i))
+        logging.info('terminated: %s', _pretty(i))
 
 def _wait_for_ip(*ids):
     while True:
@@ -261,10 +264,8 @@ def _wait_for_ip(*ids):
         if all(i.public_dns_name for i in instances):
             return [i.public_dns_name for i in instances]
         for i in instances:
-            print('waiting for:', end=' ')
             if not i.public_dns_name:
-                print(_name(i), end=' ')
-            print('')
+                logging.info('waiting for: %s', _name(i))
         time.sleep(2)
 
 
@@ -272,17 +273,17 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False):
     assert tags, 'you cannot start all things, specify some tags'
     instances = _ls(tags, 'stopped', first_n, last_n)
     assert instances, 'didnt find any stopped instances for those tags'
-    print('going to start the following instances:')
+    logging.info('going to start the following instances:')
     for i in instances:
-        print('', _pretty(i))
+        logging.info(' ' + _pretty(i))
     if not yes:
-        print('\nwould you like to proceed? y/n\n')
+        logging.info('\nwould you like to proceed? y/n\n')
         if pager.getch() != 'y':
-            print('abort')
+            logging.info('abort')
             sys.exit(1)
     for i in instances:
         i.start()
-        print('started:', _pretty(i))
+        logging.info('started: %s', _pretty(i))
     if ssh:
         assert len(instances) == 1, s.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         try:
@@ -295,59 +296,59 @@ def untag(ls_tags, unset_tags, yes=False, first_n=None, last_n=None):
     assert '=' not in unset_tags, 'no "=", just the name of the tag to unset'
     instances = _ls(tuple(ls_tags.split(',')), 'all', first_n, last_n)
     assert instances, 'didnt find any stopped instances for those tags'
-    print('going to untag the following instances:')
+    logging.info('going to untag the following instances:')
     for i in instances:
-        print('', _pretty(i))
-    print('with:')
+        logging.info(' ' + _pretty(i))
+    logging.info('with:')
     for x in unset_tags.split(','):
-        print('', x)
+        logging.info(' ' + x)
     if not yes:
-        print('\nwould you like to proceed? y/n\n')
+        logging.info('\nwould you like to proceed? y/n\n')
         if pager.getch() != 'y':
-            print('abort')
+            logging.info('abort')
             sys.exit(1)
     for i in instances:
         for t in unset_tags.split(','):
             i.create_tags(Tags=[{'Key': t, 'Value': ''}])[0].delete()
-            print('untagged:', _pretty(i))
+            logging.info('untagged: %s', _pretty(i))
 
 
 def tag(ls_tags, set_tags, yes=False, first_n=None, last_n=None):
     instances = _ls(tuple(ls_tags.split(',')), 'all', first_n, last_n)
     assert instances, 'didnt find any stopped instances for those tags'
-    print('going to tag the following instances:')
+    logging.info('going to tag the following instances:')
     for i in instances:
-        print('', _pretty(i))
-    print('with:')
+        logging.info(' ' + _pretty(i))
+    logging.info('with:')
     for x in set_tags.split(','):
-        print('', x)
+        logging.info(' ' + x)
     if not yes:
-        print('\nwould you like to proceed? y/n\n')
+        logging.info('\nwould you like to proceed? y/n\n')
         if pager.getch() != 'y':
-            print('abort')
+            logging.info('abort')
             sys.exit(1)
     for i in instances:
         for t in set_tags.split(','):
             k, v = t.split('=')
             i.create_tags(Tags=[{'Key': k, 'Value': v}])
-            print('tagged:', _pretty(i))
+            logging.info('tagged: %s', _pretty(i))
 
 
 def reboot(*tags, yes=False, first_n=None, last_n=None):
     assert tags, 'you cannot reboot all things, specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert instances, 'didnt find any stopped instances for those tags'
-    print('going to reboot the following instances:')
+    logging.info('going to reboot the following instances:')
     for i in instances:
-        print('', _pretty(i))
+        logging.info(' ' + _pretty(i))
     if not yes:
-        print('\nwould you like to proceed? y/n\n')
+        logging.info('\nwould you like to proceed? y/n\n')
         if pager.getch() != 'y':
-            print('abort')
+            logging.info('abort')
             sys.exit(1)
     for i in instances:
         i.reboot()
-        print('rebooted:', _pretty(i))
+        logging.info('rebooted: %s', _pretty(i))
 
 def _has_wildcard_permission(sg, ip):
     assert '/' not in ip
@@ -383,15 +384,15 @@ def authorize(ip, *names, yes=False):
     assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
     names = [s.strings.rm_color(x) for x in names]
     sgs = _sgs(names)
-    print('going to authorize your ip %s to these groups:' % s.colors.yellow(ip))
+    logging.info('going to authorize your ip %s to these groups:', s.colors.yellow(ip))
     if names:
         sgs = [x for x in sgs if x.group_name in names]
     for sg in sgs:
-        print('', '%s [%s]' % (sg.group_name, sg.group_id))
+        logging.info(' %s [%s]', sg.group_name, sg.group_id)
     if not yes:
-        print('\nwould you like to authorize access to these groups for your ip %s? y/n\n' % s.colors.yellow(ip))
+        logging.info('\nwould you like to authorize access to these groups for your ip %s? y/n\n', s.colors.yellow(ip))
         if pager.getch() != 'y':
-            print('abort')
+            logging.info('abort')
             sys.exit(1)
     with open('/var/log/ec2_auth_ips.log', 'a') as f:
         f.write(ip + '\n')
@@ -404,23 +405,22 @@ def authorize(ip, *names, yes=False):
                     ToPort=65535,
                     CidrIp='%s/32' % ip
                 )
-                print('authorized:', sg.group_name, sg.group_id, end=' ')
+                logging.info('authorized: %s %s %s', sg.group_name, sg.group_id, proto)
             except Exception as e:
-                print(re.sub(r'.*\((.*)\).*', r'\1', str(e)) + ':', sg.group_name, sg.group_id, end=' ')
-            print(proto)
+                logging.info('%s: %s %s %s', re.sub(r'.*\((.*)\).*', r'\1', str(e)), sg.group_name, sg.group_id, proto)
 
 
 def revoke(ip, *names, yes=False):
     assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
     sgs = _sgs(names) if names else _wildcard_security_groups(ip)
     assert sgs, 'didnt find any security groups'
-    print('your ip %s is currently wildcarded to the following security groups:\n' % s.colors.yellow(ip))
+    logging.info('your ip %s is currently wildcarded to the following security groups:\n', s.colors.yellow(ip))
     for sg in sgs:
-        print('', '%s [%s]' % (sg.group_name, sg.group_id))
+        logging.info(' %s [%s]', sg.group_name, sg.group_id)
     if not yes:
-        print('\nwould you like to revoke access to these groups for your ip %s? y/n\n' % s.colors.yellow(ip))
+        logging.info('\nwould you like to revoke access to these groups for your ip %s? y/n\n', s.colors.yellow(ip))
         if pager.getch() != 'y':
-            print('abort')
+            logging.info('abort')
             sys.exit(1)
     for sg in sgs:
         for proto in ['tcp', 'udp']:
@@ -431,10 +431,10 @@ def revoke(ip, *names, yes=False):
                     ToPort=65535,
                     CidrIp='%s/32' % ip
                 )
-                print('revoked:', sg.group_name, sg.group_id, end=' ')
+                logging.info('revoked: %s %s %s', sg.group_name, sg.group_id, proto)
             except Exception as e:
-                print(re.sub(r'.*\((.*)\).*', r'\1', str(e)) + ':', sg.group_name, sg.group_id, end=' ')
-            print(proto)
+                logging.info('%s: %s %s %s', re.sub(r'.*\((.*)\).*', r'\1', str(e)), sg.group_name, sg.group_id, proto)
+
 
 
 def amis(*name_fragments):
@@ -448,17 +448,17 @@ def amis(*name_fragments):
                                                'Values': ['hvm']}]))
     for name, xs in s.iter.groupby(amis, key=lambda x: x.name.split('-')[:-1]):
         ami = sorted(xs, key=lambda x: x.creation_date)[-1]
-        print(s.colors.green(ami.image_id), '-'.join(name))
+        logging.info('%s %s', s.colors.green(ami.image_id), '-'.join(name))
 
 
 def keys():
     for key in _ec2().key_pairs.all():
-        print(key.name)
+        logging.info(key.name)
 
 
 def vpcs():
     for vpc in _ec2().vpcs.all():
-        print(_name(vpc), 'subnets:', *[x.id for x in vpc.subnets.all()])
+        logging.info('%s subnets: %s', _name(vpc), ' '.join([x.id for x in vpc.subnets.all()]))
 
 
 def _subnet(vpc):
@@ -506,16 +506,16 @@ def new(**kw):
                 {'Key': 'num', 'Value': kw['num']},
                 {'Key': 'creation-date', 'Value': date}]
         instance.create_tags(Tags=tags)
-        print('tagged', instance.id, 'with', {x['Key']: x['Value'] for x in tags})
+        logging.info('tagged %s with %s', instance.id, {x['Key']: x['Value'] for x in tags})
 
 
 def main():
-    try:
-        if s.hacks.override('--stream'):
-            with shell.set_stream():
+    s.log.setup(format='%(message)s')
+    with s.log.disable('botocore', 'boto3'):
+        try:
+            stream = s.hacks.override('--stream')
+            with (shell.set_stream() if stream else mock.MagicMock()):
                 shell.dispatch_commands(globals(), __name__)
-        else:
-            shell.dispatch_commands(globals(), __name__)
-    except AssertionError as e:
-        print(s.colors.red(e.args[0]))
-        sys.exit(1)
+        except AssertionError as e:
+            logging.info(s.colors.red(e.args[0]))
+            sys.exit(1)

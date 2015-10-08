@@ -128,9 +128,9 @@ def ssh(*tags, first_n=None, last_n=None):
     cmd = 'ssh -A -o UserKnownHostsFile=/dev/null ubuntu@%s' % instances[0].public_dns_name
     try:
         if not sys.stdin.isatty():
-            shell.run(cmd, 'bash -s', plain=True, stream=True, stdin=sys.stdin.read())
+            shell.check_call(cmd, 'bash -s', stdin=sys.stdin.read())
         else:
-            shell.run(cmd, plain=True, stream=True)
+            shell.check_call(cmd)
     except:
         sys.exit(1)
 
@@ -144,12 +144,9 @@ def tail(path, *tags, yes=False):
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-    threads = [pool.thread.new(shell.run, 'ssh -o UserKnownHostsFile=/dev/null ubuntu@%s tail -f %s' % (i.public_dns_name, path), stream=True)
+    threads = [(shell.check_call, 'ssh -o UserKnownHostsFile=/dev/null ubuntu@%s tail -f %s' % (i.public_dns_name, path))
                for i in instances]
-    while True:
-        assert len(threads) == len(instances)
-        assert all([x.is_alive() for x in threads])
-        time.sleep(1)
+    pool.thread.supervise(*threads)
 
 
 # TODO this is dumb, weird behavior targetting files vs directores.
@@ -180,11 +177,11 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None):
     script = _tar_script(src, name)
     cmd = 'bash %(script)s | ssh ubuntu@%(host)s "mkdir -p %(dst)s && cd %(dst)s && tar xf -"' % locals()
     try:
-        shell.run(cmd, plain=True)
+        shell.check_call(cmd)
     except:
         sys.exit(1)
     finally:
-        shell.run('rm -rf', os.path.dirname(script))
+        shell.check_call('rm -rf', os.path.dirname(script))
 
 
 def pull(src, dst, *tags, first_n=None, last_n=None, name=None):
@@ -196,11 +193,11 @@ def pull(src, dst, *tags, first_n=None, last_n=None, name=None):
     script = _tar_script(src, name)
     cmd = 'cd %(dst)s && cat %(script)s | ssh ubuntu@%(host)s bash -s | tar xf -' % locals()
     try:
-        shell.run(cmd, plain=True)
+        shell.check_call(cmd)
     except:
         sys.exit(1)
     finally:
-        shell.run('rm -rf', os.path.dirname(script))
+        shell.check_call('rm -rf', os.path.dirname(script))
 
 
 def emacs(path, *tags, first_n=None, last_n=None):
@@ -209,7 +206,7 @@ def emacs(path, *tags, first_n=None, last_n=None):
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     logging.info(_pretty(instances[0]))
     try:
-        shell.run("nohup emacsclient /ubuntu@{}:{} > /dev/null &".format(instances[0].public_dns_name, path), plain=True)
+        shell.check_call("nohup emacsclient /ubuntu@{}:{} > /dev/null &".format(instances[0].public_dns_name, path))
     except:
         sys.exit(1)
 
@@ -219,7 +216,7 @@ def mosh(*tags, first_n=None, last_n=None):
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     logging.info(_pretty(instances[0]))
     try:
-        shell.run('mosh ubuntu@%s' % instances[0].public_dns_name, plain=True, stream=True)
+        shell.check_call('mosh ubuntu@%s' % instances[0].public_dns_name)
     except:
         sys.exit(1)
 
@@ -279,7 +276,7 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False):
     if ssh:
         assert len(instances) == 1, s.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         try:
-            shell.run('ssh -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], plain=True, stream=True, echo=True)
+            shell.check_call('ssh -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], echo=True)
         except:
             sys.exit(1)
 

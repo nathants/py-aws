@@ -219,7 +219,7 @@ def mosh(*tags, first_n=None, last_n=None):
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     logging.info(_pretty(instances[0]))
     try:
-        shell.run('mosh ubuntu@%s' % instances[0].public_dns_name, plain=True)
+        shell.run('mosh ubuntu@%s' % instances[0].public_dns_name, plain=True, stream=True)
     except:
         sys.exit(1)
 

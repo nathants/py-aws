@@ -123,30 +123,28 @@ def ls(*tags, state='all', first_n=None, last_n=None):
 def ssh(*tags, first_n=None, last_n=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
-    assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
-    logging.info(_pretty(instances[0]))
-    cmd = 'ssh -A -o UserKnownHostsFile=/dev/null ubuntu@%s' % instances[0].public_dns_name
+    stdin = sys.stdin.read() if not sys.stdin.isatty() else ''
+    assert (stdin and instances) or len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    for i in instances:
+        logging.info(_pretty(i))
+    cmd = 'ssh -A -o UserKnownHostsFile=/dev/null ubuntu@%s'
     try:
-        if not sys.stdin.isatty():
-            shell.check_call(cmd, 'bash -s', stdin=sys.stdin.read())
+        if stdin and len(instances) > 1:
+            justify = max(len(_name(i)) for i in instances)
+            def run(instance):
+                return (shell.run,
+                        [cmd % instance.public_dns_name,
+                         'bash -s'],
+                        {'stdin': stdin,
+                         'echo': True,
+                         'callback': lambda x: print(s.colors.cyan(_name(instance).rjust(justify)) + ': ' + x, flush=True)})
+            pool.thread.supervise(*map(run, instances))
+        elif stdin:
+            shell.check_call(cmd % instances[0].public_dns_name, 'bash -s', stdin=stdin)
         else:
-            shell.check_call(cmd)
+            shell.check_call(cmd % instances[0].public_dns_name)
     except:
         sys.exit(1)
-
-
-def tail(path, *tags, yes=False):
-    assert tags, 'you must specify some tags'
-    instances = _ls(tags, 'running')
-    logging.info('going to tail %s on the following instances:', path)
-    for i in instances:
-        logging.info(' ' + _pretty(i))
-    if not yes:
-        logging.info('\nwould you like to proceed? y/n\n')
-        assert pager.getch() == 'y', 'abort'
-    threads = [(shell.check_call, 'ssh -o UserKnownHostsFile=/dev/null ubuntu@%s tail -f %s' % (i.public_dns_name, path))
-               for i in instances]
-    pool.thread.supervise(*threads)
 
 
 # TODO this is dumb, weird behavior targetting files vs directores.
@@ -237,7 +235,7 @@ def stop(*tags, yes=False, first_n=None, last_n=None):
 
 def rm(*tags, yes=False, first_n=None, last_n=None):
     assert tags, 'you cannot stop all things, specify some tags'
-    instances = _ls(tags, 'running', first_n, last_n)
+    instances = _ls(tags, 'all', first_n, last_n)
     assert instances, 'didnt find any running instances for those tags'
     logging.info('going to terminate the following instances:')
     for i in instances:
@@ -322,7 +320,7 @@ def tag(ls_tags, set_tags, yes=False, first_n=None, last_n=None):
 def reboot(*tags, yes=False, first_n=None, last_n=None):
     assert tags, 'you cannot reboot all things, specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
-    assert instances, 'didnt find any stopped instances for those tags'
+    assert instances, 'didnt find any running instances for those tags'
     logging.info('going to reboot the following instances:')
     for i in instances:
         logging.info(' ' + _pretty(i))
@@ -488,12 +486,13 @@ def new(**kw):
 
 
 def main():
-    s.log.setup(format='%(message)s')
+    s.log.setup(format='%(message)s', stdout=True)
     with s.log.disable('botocore', 'boto3'):
         try:
             stream = s.hacks.override('--stream')
             with (shell.set_stream() if stream else mock.MagicMock()):
                 shell.dispatch_commands(globals(), __name__)
         except AssertionError as e:
-            logging.info(s.colors.red(e.args[0]))
+            if e.args:
+                logging.info(s.colors.red(e.args[0]))
             sys.exit(1)

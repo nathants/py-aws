@@ -1,4 +1,5 @@
 import argh
+import itertools
 import mock
 import s.log
 import logging
@@ -120,7 +121,7 @@ def ls(*tags, state='all', first_n=None, last_n=None):
     logging.info(x)
 
 
-def ssh(*tags, first_n=None, last_n=None):
+def ssh(*tags, first_n=None, last_n=None, quiet=False):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     stdin = sys.stdin.read() if not sys.stdin.isatty() else ''
@@ -128,23 +129,80 @@ def ssh(*tags, first_n=None, last_n=None):
     for i in instances:
         logging.info(_pretty(i))
     cmd = 'ssh -A -o UserKnownHostsFile=/dev/null ubuntu@%s'
+    failures = []
     try:
         if stdin and len(instances) > 1:
+            # TODO for this, cant use stdin for scripts.
+            # logging.info('\nwould you like to proceed? y/n\n')
+            # assert pager.getch() == 'y', 'abort'
             justify = max(len(_name(i)) for i in instances)
-            def run(instance):
-                return (shell.run,
-                        [cmd % instance.public_dns_name,
-                         'bash -s'],
-                        {'stdin': stdin,
-                         'echo': True,
-                         'callback': lambda x: print(s.colors.cyan(_name(instance).rjust(justify)) + ': ' + x, flush=True)})
-            pool.thread.supervise(*map(run, instances))
+            def run(instance, color):
+                def fn():
+                    try:
+                        shell.run(cmd % instance.public_dns_name,
+                                  'bash -s',
+                                  stdin=stdin,
+                                  echo=True,
+                                  callback=lambda x: print(getattr(s.colors, color)
+                                                           (x if quiet
+                                                            else _name(instance).rjust(justify) + ': ' + x),
+                                                           flush=True))
+                    except:
+                        msg = s.colors.red('failure for: %s %s' % (_name(instance), instance.public_dns_name))
+                        logging.error(msg)
+                        failures.append(msg)
+                return fn
+            pool.thread.wait(*map(run, instances, itertools.cycle(s.colors._colors)))
         elif stdin:
             shell.check_call(cmd % instances[0].public_dns_name, 'bash -s', stdin=stdin)
         else:
             shell.check_call(cmd % instances[0].public_dns_name)
     except:
         sys.exit(1)
+    if failures:
+        for f in failures:
+            logging.error(f)
+        sys.exit(1)
+
+
+# TODO shouldnt exit on failure, but let all procs finish, and then show all errors, and exit appropriately
+# TODO add prompt with list of files to transfer
+def push(src, dst, *tags, first_n=None, last_n=None, name=None):
+    assert tags, 'you must specify some tags'
+    instances = _ls(tags, 'running', first_n, last_n)
+    assert len(instances), 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    for instance in instances:
+        logging.info(_pretty(instance))
+        host = instance.public_dns_name
+        script = _tar_script(src, name)
+        cmd = 'bash %(script)s | ssh ubuntu@%(host)s "mkdir -p %(dst)s && cd %(dst)s && tar xf -"' % locals()
+        try:
+            shell.check_call(cmd)
+        except:
+            logging.error('failure for: %s %s', _name(instance), instance.public_dns_name)
+            sys.exit(1)
+        finally:
+            shell.check_call('rm -rf', os.path.dirname(script))
+
+
+# TODO shouldnt exit on failure, but let all procs finish, and then show all errors, and exit appropriately
+# TODO add prompt with list of files to transfer
+def pull(src, dst, *tags, first_n=None, last_n=None, name=None):
+    assert tags, 'you must specify some tags'
+    instances = _ls(tags, 'running', first_n, last_n)
+    assert len(instances), 'didnt find exactly instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    for instance in instances:
+        logging.info(_pretty(instance))
+        host = instance.public_dns_name
+        script = _tar_script(src, name)
+        cmd = 'cd %(dst)s && cat %(script)s | ssh ubuntu@%(host)s bash -s | tar xf -' % locals()
+        try:
+            shell.check_call(cmd)
+        except:
+            logging.error('failure for: %s %s', _name(instance), instance.public_dns_name)
+            sys.exit(1)
+        finally:
+            shell.check_call('rm -rf', os.path.dirname(script))
 
 
 # TODO this is dumb, weird behavior targetting files vs directores.
@@ -164,38 +222,6 @@ def _tar_script(src, name):
         with open('script.sh', 'w') as f:
             f.write(script)
         return os.path.abspath('script.sh')
-
-
-def push(src, dst, *tags, first_n=None, last_n=None, name=None):
-    assert tags, 'you must specify some tags'
-    instances = _ls(tags, 'running', first_n, last_n)
-    assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
-    logging.info(_pretty(instances[0]))
-    host = instances[0].public_dns_name
-    script = _tar_script(src, name)
-    cmd = 'bash %(script)s | ssh ubuntu@%(host)s "mkdir -p %(dst)s && cd %(dst)s && tar xf -"' % locals()
-    try:
-        shell.check_call(cmd)
-    except:
-        sys.exit(1)
-    finally:
-        shell.check_call('rm -rf', os.path.dirname(script))
-
-
-def pull(src, dst, *tags, first_n=None, last_n=None, name=None):
-    assert tags, 'you must specify some tags'
-    instances = _ls(tags, 'running', first_n, last_n)
-    assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
-    logging.info(_pretty(instances[0]))
-    host = instances[0].public_dns_name
-    script = _tar_script(src, name)
-    cmd = 'cd %(dst)s && cat %(script)s | ssh ubuntu@%(host)s bash -s | tar xf -' % locals()
-    try:
-        shell.check_call(cmd)
-    except:
-        sys.exit(1)
-    finally:
-        shell.check_call('rm -rf', os.path.dirname(script))
 
 
 def emacs(path, *tags, first_n=None, last_n=None):

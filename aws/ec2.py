@@ -121,47 +121,53 @@ def ls(*tags, state='all', first_n=None, last_n=None):
     logging.info(x)
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False):
+def ssh(*tags, first_n=None, last_n=None, quiet=False, script=''):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
-    stdin = sys.stdin.read() if not sys.stdin.isatty() else ''
-    assert (stdin and instances) or len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    if os.path.isfile(script):
+        with open(script) as f:
+            script = f.read()
+    assert (script and instances) or len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     for i in instances:
         logging.info(_pretty(i))
     cmd = 'ssh -A -o UserKnownHostsFile=/dev/null ubuntu@%s'
-    failures = []
     try:
-        if stdin and len(instances) > 1:
-            # TODO for this, cant use stdin for scripts.
-            # logging.info('\nwould you like to proceed? y/n\n')
-            # assert pager.getch() == 'y', 'abort'
+        if script and len(instances) > 1:
+            failures = []
+            successes = []
+            logging.info('\nwould you like to proceed? y/n\n')
+            assert pager.getch() == 'y', 'abort'
             justify = max(len(_name(i)) for i in instances)
             def run(instance, color):
+                color = getattr(s.colors, color)
+                name = _name(instance).rjust(justify)
                 def fn():
                     try:
                         shell.run(cmd % instance.public_dns_name,
                                   'bash -s',
-                                  stdin=stdin,
+                                  stdin=script,
                                   echo=True,
-                                  callback=lambda x: print(getattr(s.colors, color)
-                                                           (x if quiet
-                                                            else _name(instance).rjust(justify) + ': ' + x),
-                                                           flush=True))
+                                  callback=lambda x: logging.info(color(x if quiet else name + ': ' + x)))
                     except:
                         msg = s.colors.red('failure for: %s %s' % (_name(instance), instance.public_dns_name))
-                        logging.error(msg)
+                        logging.info(msg)
                         failures.append(msg)
+                    else:
+                        msg = s.colors.green('success for: %s %s' % (_name(instance), instance.public_dns_name))
+                        logging.info(msg)
+                        successes.append(msg)
                 return fn
             pool.thread.wait(*map(run, instances, itertools.cycle(s.colors._colors)))
-        elif stdin:
-            shell.check_call(cmd % instances[0].public_dns_name, 'bash -s', stdin=stdin)
+            logging.info('\nresults:')
+            for msg in successes + failures:
+                logging.info(' ' + msg)
+            if failures:
+                sys.exit(1)
+        elif script:
+            shell.check_call(cmd % instances[0].public_dns_name, 'bash -s', stdin=script)
         else:
             shell.check_call(cmd % instances[0].public_dns_name)
     except:
-        sys.exit(1)
-    if failures:
-        for f in failures:
-            logging.error(f)
         sys.exit(1)
 
 

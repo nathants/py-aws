@@ -144,7 +144,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False):
                     try:
                         shell.run(cmd % instance.public_dns_name, 'bash -s',
                                   stdin=script,
-                                  callback=lambda x: print(color(x if quiet else name + x)), flush=True)
+                                  callback=lambda x: print(color(x if quiet else name + x), flush=True))
                     except:
                         failures.append(s.colors.red('failure: ') + instance.public_dns_name)
                     else:
@@ -187,7 +187,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
                 shell.run('bash', script,
                           '|ssh -o StrictHostKeyChecking=no ubuntu@' + instance.public_dns_name,
                           '"mkdir -p', dst, '&& cd', dst, '&& tar xf -"',
-                          callback=lambda x: print(color(name + x)), flush=True)
+                          callback=lambda x: print(color(name + x), flush=True))
             except:
                 failures.append(s.colors.red('failure: ') + instance.public_dns_name)
             else:
@@ -318,10 +318,15 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):
     if ssh:
         assert len(instances) == 1, s.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         try:
-            shell.check_call('ssh -o StrictHostKeyChecking=no -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], echo=True)
+            for _ in range(10):
+                try:
+                    return shell.check_call('ssh -o StrictHostKeyChecking=no -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], echo=True)
+                except:
+                    time.sleep(1)
+            assert False
         except:
             sys.exit(1)
-    if wait:
+    elif wait:
         logging.info('waiting for all to start')
         for i in instances:
             i.wait_until_running()
@@ -555,10 +560,15 @@ def new(**kw):
     if kw['ssh']:
         assert len(instances) == 1, s.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         try:
-            shell.check_call('ssh -o StrictHostKeyChecking=no -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], echo=True)
+            for _ in range(10):
+                try:
+                    return shell.check_call('ssh -o StrictHostKeyChecking=no -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], echo=True)
+                except:
+                    time.sleep(1)
+            assert False
         except:
             sys.exit(1)
-    if kw['wait']:
+    elif kw['wait']:
         logging.info('waiting for all to start')
         for i in instances:
             i.wait_until_running()

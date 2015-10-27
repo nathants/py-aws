@@ -1,7 +1,7 @@
 import argh
 import itertools
 import mock
-import s.log
+import util.log
 import logging
 import boto3
 import datetime
@@ -9,11 +9,11 @@ import os
 import pager
 import pool.thread
 import re
-import s.cached
-import s.colors
-import s.exceptions
-import s.iter
-import s.strings
+import util.cached
+import util.colors
+import util.exceptions
+import util.iter
+import util.strings
 import shell
 import shell.conf
 import sys
@@ -21,7 +21,7 @@ import time
 import time
 
 
-@s.cached.func
+@util.cached.func
 def _ec2():
     return boto3.resource('ec2')
 
@@ -83,11 +83,11 @@ def _matches(instance, tags):
 
 def _pretty(instance):
     if instance.state['Name'] == 'running':
-        color = s.colors.green
+        color = util.colors.green
     elif instance.state['Name'] == 'pending':
-        color = s.colors.cyan
+        color = util.colors.cyan
     else:
-        color = s.colors.red
+        color = util.colors.red
     return ' '.join([
         color(_name(instance)),
         instance.instance_type,
@@ -99,7 +99,7 @@ def _pretty(instance):
     ])
 
 def _name(instance):
-    return _tags(instance).get('Name', '<no-name>')
+    return _tags(instance).get('Name', '<no-name>').replace(' ', '_')
 
 
 def _name_group(instance):
@@ -115,7 +115,7 @@ def ls(*tags, state='all', first_n=None, last_n=None):
     x = _ls(tags, state, first_n, last_n)
     x = map(_pretty, x)
     x = '\n'.join(x)
-    x = s.strings.align(x)
+    x = util.strings.align(x)
     print(x, flush=True)
 
 
@@ -138,7 +138,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False):
                 assert pager.getch() == 'y', 'abort'
             justify = max(len(i.public_dns_name.split('.')[0]) for i in instances)
             def run(instance, color):
-                color = getattr(s.colors, color)
+                color = getattr(util.colors, color)
                 name = (instance.public_dns_name.split('.')[0] + ': ').ljust(justify + 2)
                 def fn():
                     try:
@@ -146,11 +146,11 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False):
                                   stdin=script,
                                   callback=lambda x: print(color(x if quiet else name + x), flush=True))
                     except:
-                        failures.append(s.colors.red('failure: ') + instance.public_dns_name)
+                        failures.append(util.colors.red('failure: ') + instance.public_dns_name)
                     else:
-                        successes.append(s.colors.green('success: ') + instance.public_dns_name)
+                        successes.append(util.colors.green('success: ') + instance.public_dns_name)
                 return fn
-            pool.thread.wait(*map(run, instances, itertools.cycle(s.colors._colors)))
+            pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors)))
             logging.info('\nresults:')
             for msg in successes + failures:
                 logging.info(' ' + msg)
@@ -164,14 +164,25 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False):
         sys.exit(1)
 
 
+def scp(src, dst, *tags):
+    assert tags, 'you must specify some tags'
+    instances = _ls(tags, 'running')
+    assert len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    host = 'ubuntu@' + instances[0].public_dns_name
+    src = host + src if src.startswith(':') else src
+    dst = host + dst if dst.startswith(':') else dst
+    shell.check_call('scp', src, dst, echo=True)
+
+
+# TODO when one instance only, dont colorize
 def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
-    assert len(instances), 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    assert instances, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     logging.info('targeting:')
     for instance in instances:
         logging.info(' %s', _pretty(instance))
-    logging.info('going to push:\n%s', s.strings.indent(shell.run('bash', _tar_script(src, name, echo_only=True)), 1))
+    logging.info('going to push:\n%s', util.strings.indent(shell.run('bash', _tar_script(src, name, echo_only=True)), 1))
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
@@ -180,7 +191,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
     successes = []
     justify = max(len(i.public_dns_name.split('.')[0]) for i in instances)
     def run(instance, color):
-        color = getattr(s.colors, color)
+        color = getattr(util.colors, color)
         name = (instance.public_dns_name.split('.')[0] + ': ').ljust(justify + 2)
         def fn():
             try:
@@ -189,11 +200,11 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
                           '"mkdir -p', dst, '&& cd', dst, '&& tar xf -"',
                           callback=lambda x: print(color(name + x), flush=True))
             except:
-                failures.append(s.colors.red('failure: ') + instance.public_dns_name)
+                failures.append(util.colors.red('failure: ') + instance.public_dns_name)
             else:
-                successes.append(s.colors.green('success: ') + instance.public_dns_name)
+                successes.append(util.colors.green('success: ') + instance.public_dns_name)
         return fn
-    pool.thread.wait(*map(run, instances, itertools.cycle(s.colors._colors)))
+    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors)))
     shell.check_call('rm -rf', os.path.dirname(script))
     logging.info('\nresults:')
     for msg in successes + failures:
@@ -212,7 +223,7 @@ def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
     script = _tar_script(src, name, echo_only=True)
     cmd = 'cat %(script)s |ssh -o StrictHostKeyChecking=no ubuntu@%(host)s bash -s' % locals()
     logging.info('going to pull:')
-    logging.info(s.strings.indent(shell.check_output(cmd), 1))
+    logging.info(util.strings.indent(shell.check_output(cmd), 1))
     shell.check_call('rm -rf', os.path.dirname(script))
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
@@ -228,6 +239,7 @@ def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
         shell.check_call('rm -rf', os.path.dirname(script))
 
 
+# TODO drop -name and use grep for include and exclude varargs.
 def _tar_script(src, name, echo_only=False):
     name = ('-name %s' % name) if name else ''
     script = ('cd %(src)s\n'
@@ -316,7 +328,7 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):
         i.start()
         logging.info('started: %s', _pretty(i))
     if ssh:
-        assert len(instances) == 1, s.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
+        assert len(instances) == 1, util.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         try:
             for _ in range(10):
                 try:
@@ -404,7 +416,7 @@ def reboot(*tags, yes=False, first_n=None, last_n=None):
 def _has_wildcard_permission(sg, ip):
     assert '/' not in ip
     for sg_perm in sg.ip_permissions:
-        with s.exceptions.ignore(KeyError):
+        with util.exceptions.ignore(KeyError):
             all_ports = sg_perm['FromPort'] in [0, 1] and sg_perm['ToPort'] == 65535
             matches_ip = any(x['CidrIp'] == ip + '/32' for x in sg_perm['IpRanges'])
             if all_ports and matches_ip:
@@ -416,12 +428,12 @@ def _wildcard_security_groups(ip):
 
 def sgs():
     for sg in _sgs():
-        yield '%s [%s]' % (s.colors.green(sg.group_name), sg.group_id)
+        yield '%s [%s]' % (util.colors.green(sg.group_name), sg.group_id)
 
 
 def auths(ip):
     for sg in _wildcard_security_groups(ip):
-        yield '%s [%s]' % (s.colors.green(sg.group_name), sg.group_id)
+        yield '%s [%s]' % (util.colors.green(sg.group_name), sg.group_id)
 
 
 def _sgs(names=None):
@@ -433,15 +445,15 @@ def _sgs(names=None):
 
 def authorize(ip, *names, yes=False):
     assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
-    names = [s.strings.rm_color(x) for x in names]
+    names = [util.strings.rm_color(x) for x in names]
     sgs = _sgs(names)
-    logging.info('going to authorize your ip %s to these groups:', s.colors.yellow(ip))
+    logging.info('going to authorize your ip %s to these groups:', util.colors.yellow(ip))
     if names:
         sgs = [x for x in sgs if x.group_name in names]
     for sg in sgs:
         logging.info(' %s [%s]', sg.group_name, sg.group_id)
     if not yes:
-        logging.info('\nwould you like to authorize access to these groups for your ip %s? y/n\n', s.colors.yellow(ip))
+        logging.info('\nwould you like to authorize access to these groups for your ip %s? y/n\n', util.colors.yellow(ip))
         assert pager.getch() == 'y', 'abort'
     with open('/var/log/ec2_auth_ips.log', 'a') as f:
         f.write(ip + '\n')
@@ -463,11 +475,11 @@ def revoke(ip, *names, yes=False):
     assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
     sgs = _sgs(names) if names else _wildcard_security_groups(ip)
     assert sgs, 'didnt find any security groups'
-    logging.info('your ip %s is currently wildcarded to the following security groups:\n', s.colors.yellow(ip))
+    logging.info('your ip %s is currently wildcarded to the following security groups:\n', util.colors.yellow(ip))
     for sg in sgs:
         logging.info(' %s [%s]', sg.group_name, sg.group_id)
     if not yes:
-        logging.info('\nwould you like to revoke access to these groups for your ip %s? y/n\n', s.colors.yellow(ip))
+        logging.info('\nwould you like to revoke access to these groups for your ip %s? y/n\n', util.colors.yellow(ip))
         assert pager.getch() == 'y', 'abort'
     for sg in sgs:
         for proto in ['tcp', 'udp']:
@@ -492,9 +504,9 @@ def amis(*name_fragments):
                                                'Values': ['x86_64']},
                                               {'Name': 'virtualization-type',
                                                'Values': ['hvm']}]))
-    for name, xs in s.iter.groupby(amis, key=lambda x: x.name.split('-')[:-1]):
+    for name, xs in util.iter.groupby(amis, key=lambda x: x.name.split('-')[:-1]):
         ami = sorted(xs, key=lambda x: x.creation_date)[-1]
-        logging.info('%s %s', s.colors.green(ami.image_id), '-'.join(name))
+        logging.info('%s %s', util.colors.green(ami.image_id), '-'.join(name))
 
 
 def keys():
@@ -558,7 +570,7 @@ def new(**kw):
         i.create_tags(Tags=tags)
         logging.info('tagged: %s', _pretty(i))
     if kw['ssh']:
-        assert len(instances) == 1, s.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
+        assert len(instances) == 1, util.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         try:
             for _ in range(10):
                 try:
@@ -576,13 +588,13 @@ def new(**kw):
 
 def main():
     shell.ignore_closed_pipes()
-    s.log.setup(format='%(message)s')
-    with s.log.disable('botocore', 'boto3'):
+    util.log.setup(format='%(message)s')
+    with util.log.disable('botocore', 'boto3'):
         try:
-            stream = s.hacks.override('--stream')
+            stream = util.hacks.override('--stream')
             with (shell.set_stream() if stream else mock.MagicMock()):
                 shell.dispatch_commands(globals(), __name__)
         except AssertionError as e:
             if e.args:
-                logging.info(s.colors.red(e.args[0]))
+                logging.info(util.colors.red(e.args[0]))
             sys.exit(1)

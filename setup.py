@@ -1,5 +1,4 @@
 import setuptools
-import os
 
 
 setuptools.setup(
@@ -9,17 +8,9 @@ setuptools.setup(
     author='nathan todd-stone',
     author_email='me@nathants.com',
     url='http://github.com/nathants/py-aws',
-    packages=setuptools.find_packages(),
-    install_requires=open('requirements.txt').readlines(),
-    entry_points={'console_scripts': [
-        '{} = aws.{}:main'.format(
-            x.replace('.py', '').replace('_', '-'),
-            x.replace('.py', '')
-        )
-        for x in os.listdir('aws')
-        if not x.startswith('_')
-        and not x.startswith('.')
-        and not x.endswith('.pyc')
-    ]},
+    packages=['aws'],
+    install_requires=['boto3',
+                      'pager'],
+    entry_points={'console_scripts': ['ec2 = aws.ec2:main']},
     description='aws',
 )

@@ -119,7 +119,7 @@ def ls(*tags, state='all', first_n=None, last_n=None):
     print(x, flush=True)
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False):
+def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False, max_threads=0):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     if os.path.isfile(script):
@@ -150,7 +150,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False):
                     else:
                         successes.append(util.colors.green('success: ') + instance.public_dns_name)
                 return fn
-            pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors)))
+            pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors)), max_threads=max_threads)
             logging.info('\nresults:')
             for msg in successes + failures:
                 logging.info(' ' + msg)

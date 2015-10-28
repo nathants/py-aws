@@ -560,7 +560,7 @@ def new(**kw):
                                         InstanceType=kw['type'],
                                         SubnetId=_subnet(kw['vpc']),
                                         BlockDeviceMappings=_blocks(kw['gigs']))
-    date = str(datetime.datetime.now())
+    date = str(datetime.datetime.now()).replace(' ', 'T')
     for n, i in enumerate(instances):
         tags = [{'Key': 'Name', 'Value': kw['name']},
                 {'Key': 'owner', 'Value': owner},

@@ -126,19 +126,20 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False, max
         with open(script) as f:
             script = f.read()
     assert (script and instances) or len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
-    for i in instances:
-        logging.info(_pretty(i))
+    if not (quiet and yes):
+        for i in instances:
+            logging.info(_pretty(i))
     cmd = 'ssh -A -o StrictHostKeyChecking=no ubuntu@%s'
+    if not yes:
+        logging.info('\nwould you like to proceed? y/n\n')
+        assert pager.getch() == 'y', 'abort'
     try:
         if script and len(instances) > 1:
             failures = []
             successes = []
-            if not yes:
-                logging.info('\nwould you like to proceed? y/n\n')
-                assert pager.getch() == 'y', 'abort'
             justify = max(len(i.public_dns_name.split('.')[0]) for i in instances)
             def run(instance, color):
-                color = getattr(util.colors, color)
+                color = (lambda x: x) if quiet else getattr(util.colors, color)
                 name = (instance.public_dns_name.split('.')[0] + ': ').ljust(justify + 2)
                 def fn():
                     try:
@@ -151,9 +152,10 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False, max
                         successes.append(util.colors.green('success: ') + instance.public_dns_name)
                 return fn
             pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors)), max_threads=max_threads)
-            logging.info('\nresults:')
-            for msg in successes + failures:
-                logging.info(' ' + msg)
+            if not quiet:
+                logging.info('\nresults:')
+                for msg in successes + failures:
+                    logging.info(' ' + msg)
             if failures:
                 sys.exit(1)
         elif script:
@@ -164,14 +166,43 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False, max
         sys.exit(1)
 
 
-def scp(src, dst, *tags):
+def scp(src, dst, *tags, yes=False):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running')
-    assert len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
-    host = 'ubuntu@' + instances[0].public_dns_name
-    src = host + src if src.startswith(':') else src
-    dst = host + dst if dst.startswith(':') else dst
-    shell.check_call('scp', src, dst, echo=True)
+    assert instances, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    logging.info('targeting:')
+    for instance in instances:
+        logging.info(' %s', _pretty(instance))
+    logging.info('going to scp: %s to %s', src, dst)
+    if not yes:
+        logging.info('\nwould you like to proceed? y/n\n')
+        assert pager.getch() == 'y', 'abort'
+    justify = max(len(i.public_dns_name.split('.')[0]) for i in instances)
+    def run(instance, color):
+        if color:
+            color = getattr(util.colors, color)
+        else:
+            color = lambda x: x
+        name = (instance.public_dns_name.split('.')[0] + ': ').ljust(justify + 2)
+        def fn():
+            host = 'ubuntu@' + instance.public_dns_name
+            _src = host + src if src.startswith(':') else src
+            _dst = host + dst if dst.startswith(':') else dst
+            try:
+                shell.run('scp', _src, _dst, callback=lambda x: print(color(name + x), flush=True))
+            except:
+                failures.append(util.colors.red('failure: ') + instance.public_dns_name)
+            else:
+                successes.append(util.colors.green('success: ') + instance.public_dns_name)
+        return fn
+    failures = []
+    successes = []
+    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors) if len(instances) > 1 else [False]))
+    logging.info('\nresults:')
+    for msg in successes + failures:
+        logging.info(' ' + msg)
+    if failures:
+        sys.exit(1)
 
 
 # TODO when one instance only, dont colorize
@@ -191,7 +222,10 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
     successes = []
     justify = max(len(i.public_dns_name.split('.')[0]) for i in instances)
     def run(instance, color):
-        color = getattr(util.colors, color)
+        if color:
+            color = getattr(util.colors, color)
+        else:
+            color = lambda x: x
         name = (instance.public_dns_name.split('.')[0] + ': ').ljust(justify + 2)
         def fn():
             try:
@@ -204,7 +238,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
             else:
                 successes.append(util.colors.green('success: ') + instance.public_dns_name)
         return fn
-    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors)))
+    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors) if len(instances) > 1 else [False]))
     shell.check_call('rm -rf', os.path.dirname(script))
     logging.info('\nresults:')
     for msg in successes + failures:
@@ -330,12 +364,8 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):
     if ssh:
         assert len(instances) == 1, util.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         try:
-            for _ in range(10):
-                try:
-                    return shell.check_call('ssh -o StrictHostKeyChecking=no -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], echo=True)
-                except:
-                    time.sleep(1)
-            assert False
+            instances[0].wait_until_running()
+            shell.check_call('ssh -o StrictHostKeyChecking=no -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], echo=True)
         except:
             sys.exit(1)
     elif wait:
@@ -572,12 +602,8 @@ def new(**kw):
     if kw['ssh']:
         assert len(instances) == 1, util.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         try:
-            for _ in range(10):
-                try:
-                    return shell.check_call('ssh -o StrictHostKeyChecking=no -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], echo=True)
-                except:
-                    time.sleep(1)
-            assert False
+            instances[0].wait_until_running()
+            shell.check_call('ssh -o StrictHostKeyChecking=no -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], echo=True)
         except:
             sys.exit(1)
     elif kw['wait']:

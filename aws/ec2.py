@@ -146,7 +146,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False, max
                     try:
                         shell.run(cmd % instance.public_dns_name, 'bash -s',
                                   stdin=script,
-                                  callback=lambda x: print(color(x if quiet else name + x), flush=True))
+                                  callback=lambda x: print(color(x if quiet else name + x).replace('\r', ''), flush=True))
                     except:
                         failures.append(util.colors.red('failure: ') + instance.public_dns_name)
                     else:

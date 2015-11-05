@@ -17,8 +17,6 @@ import util.strings
 import shell
 import shell.conf
 import sys
-import time
-import time
 
 
 @util.cached.func
@@ -40,10 +38,13 @@ def _ls(tags, state='running', first_n=None, last_n=None):
     else:
         for s in state:
             assert s in ['running', 'stopped', 'terminated', 'all'], 'no such state: ' + state
-    if tags and '=' not in tags[0]:
+    if tags and not tags[0].endswith('.amazonaws.com') and '=' not in tags[0]:
         tags = ('Name=%s' % tags[0],) + tuple(tags[1:])
     filters = [{'Name': 'instance-state-name', 'Values': [state]}] if state != 'all' else []
-    if any('*' in tag for tag in tags):
+    if tags and tags[0].endswith('.amazonaws.com'):
+        filters += [{'Name': 'dns-name', 'Values': [tags[0]]}]
+        instances = _ec2().instances.filter(Filters=filters)
+    elif any('*' in tag for tag in tags):
         instances = _ec2().instances.filter(Filters=filters)
         instances = [i for i in instances if _matches(i, tags)]
     else:
@@ -137,10 +138,10 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False, max
         if script and len(instances) > 1:
             failures = []
             successes = []
-            justify = max(len(i.public_dns_name.split('.')[0]) for i in instances)
+            justify = max(len(i.public_dns_name) for i in instances)
             def run(instance, color):
                 color = (lambda x: x) if quiet else getattr(util.colors, color)
-                name = (instance.public_dns_name.split('.')[0] + ': ').ljust(justify + 2)
+                name = (instance.public_dns_name + ': ').ljust(justify + 2)
                 def fn():
                     try:
                         shell.run(cmd % instance.public_dns_name, 'bash -s',
@@ -177,13 +178,13 @@ def scp(src, dst, *tags, yes=False):
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-    justify = max(len(i.public_dns_name.split('.')[0]) for i in instances)
+    justify = max(len(i.public_dns_name) for i in instances)
     def run(instance, color):
         if color:
             color = getattr(util.colors, color)
         else:
             color = lambda x: x
-        name = (instance.public_dns_name.split('.')[0] + ': ').ljust(justify + 2)
+        name = (instance.public_dns_name + ': ').ljust(justify + 2)
         def fn():
             host = 'ubuntu@' + instance.public_dns_name
             _src = host + src if src.startswith(':') else src
@@ -220,13 +221,13 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
     script = _tar_script(src, name)
     failures = []
     successes = []
-    justify = max(len(i.public_dns_name.split('.')[0]) for i in instances)
+    justify = max(len(i.public_dns_name) for i in instances)
     def run(instance, color):
         if color:
             color = getattr(util.colors, color)
         else:
             color = lambda x: x
-        name = (instance.public_dns_name.split('.')[0] + ': ').ljust(justify + 2)
+        name = (instance.public_dns_name + ': ').ljust(justify + 2)
         def fn():
             try:
                 shell.run('bash', script,

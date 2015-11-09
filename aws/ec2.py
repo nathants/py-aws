@@ -1,57 +1,75 @@
-import argh
-import itertools
-import mock
-import util.log
-import logging
 import boto3
+import subprocess
+import base64
 import datetime
+import itertools
+import logging
+import mock
 import os
 import pager
 import pool.thread
+import pprint
 import re
+import shell
+import shell.conf
+import sys
+import time
 import util.cached
 import util.colors
 import util.exceptions
 import util.iter
+import util.log
 import util.strings
-import shell
-import shell.conf
-import sys
+import util.time
+
+
+util.log.setup(format='%(message)s')
+
+
+ssh_args = ' -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no '
 
 
 @util.cached.func
-def _ec2():
+def _resource():
     return boto3.resource('ec2')
+
+
+@util.cached.func
+def _client():
+    return boto3.client('ec2')
 
 
 def _tags(instance):
     return {x['Key']: x['Value'] for x in (instance.tags or {})}
 
 
-def _ls_by_ids(*ids):
-    return _ec2().instances.filter(Filters=[{'Name': 'instance-id', 'Values': ids}])
-
-
+# TODO cache wildcard looks. they are too slow. ping host and lookup for real on miss.
 def _ls(tags, state='running', first_n=None, last_n=None):
     if isinstance(state, str):
         assert state in ['running', 'stopped', 'terminated', 'all'], 'no such state: ' + state
+        state = [state]
     else:
         for s in state:
             assert s in ['running', 'stopped', 'terminated', 'all'], 'no such state: ' + state
-    if tags and not tags[0].endswith('.amazonaws.com') and '=' not in tags[0]:
+    is_dns_name = tags and tags[0].endswith('.amazonaws.com')
+    is_instance_id = tags and re.search(r'i\-[a-zA-Z0-9]{8}', tags[0])
+    if tags and not is_dns_name and not is_instance_id and '=' not in tags[0]:
         tags = ('Name=%s' % tags[0],) + tuple(tags[1:])
-    filters = [{'Name': 'instance-state-name', 'Values': [state]}] if state != 'all' else []
-    if tags and tags[0].endswith('.amazonaws.com'):
-        filters += [{'Name': 'dns-name', 'Values': [tags[0]]}]
-        instances = _ec2().instances.filter(Filters=filters)
+    filters = [{'Name': 'instance-state-name', 'Values': state}] if state[0] != 'all' else []
+    if is_dns_name:
+        filters += [{'Name': 'dns-name', 'Values': tags}]
+        instances = _resource().instances.filter(Filters=filters)
+    elif is_instance_id:
+        filters += [{'Name': 'instance-id', 'Values': tags}]
+        instances = _resource().instances.filter(Filters=filters)
     elif any('*' in tag for tag in tags):
-        instances = _ec2().instances.filter(Filters=filters)
+        instances = _resource().instances.filter(Filters=filters)
         instances = [i for i in instances if _matches(i, tags)]
     else:
         filters += [{'Name': 'tag:%s' % name, 'Values': [value]}
                     for tag in tags
                     for name, value in [tag.split('=')]]
-        instances = _ec2().instances.filter(Filters=filters)
+        instances = _resource().instances.filter(Filters=filters)
     instances = sorted(instances, key=_name_group)
     instances = sorted(instances, key=lambda i: i.meta.data['LaunchTime'], reverse=True)
     if first_n:
@@ -93,10 +111,13 @@ def _pretty(instance):
         color(_name(instance)),
         instance.instance_type,
         instance.state['Name'],
+        instance.instance_id,
         instance.public_dns_name or '<no-ip>',
         ','.join([x['GroupName'] for x in instance.security_groups]),
-        ' '.join('%s=%s' % (k, v) for k, v in sorted(_tags(instance).items(), key=lambda x: x[0]) if k != 'Name' and v),
-        str(instance.meta.data['LaunchTime'])[:16],
+        ' '.join('%s=%s' % (k, v)
+                 for k, v in sorted(_tags(instance).items(), key=lambda x: x[0])
+                 if k not in ['Name', 'creation-date']
+                 and v),
     ])
 
 def _name(instance):
@@ -120,33 +141,43 @@ def ls(*tags, state='all', first_n=None, last_n=None):
     print(x, flush=True)
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False, max_threads=0):
+def b64_encode(x):
+    return base64.b64encode(bytes(x, 'utf-8')).decode('utf-8')
+
+
+def remote_cmd(cmd):
+    return "bash -c 'path=/tmp/$(uuidgen); echo %s | base64 -d > $path || exit 1; bash $path; code=$?; rm $path; exit $code'" % b64_encode(cmd)
+
+
+def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=0):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
-    if os.path.isfile(script):
-        with open(script) as f:
-            script = f.read()
-    assert (script and instances) or len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    if os.path.isfile(cmd):
+        with open(cmd) as f:
+            cmd = f.read()
+    assert (cmd and instances) or len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     if not (quiet and yes):
         for i in instances:
             logging.info(_pretty(i))
-    cmd = 'ssh -A -o StrictHostKeyChecking=no ubuntu@%s'
-    if not yes:
+    ssh_cmd = ('ssh -ttA' + ssh_args).split()
+    if not yes and not (len(instances) == 1 and not cmd):
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     try:
-        if script and len(instances) > 1:
+        if cmd and len(instances) > 1:
             failures = []
             successes = []
-            justify = max(len(i.public_dns_name) for i in instances)
             def run(instance, color):
                 color = (lambda x: x) if quiet else getattr(util.colors, color)
-                name = (instance.public_dns_name + ': ').ljust(justify + 2)
+                # TODO is justify actually stupid?
+                name = (_name(instance) + ': ' + instance.public_dns_name + ': ')
                 def fn():
                     try:
-                        shell.run(cmd % instance.public_dns_name, 'bash -s',
-                                  stdin=script,
-                                  callback=lambda x: print(color(x if quiet else name + x).replace('\r', ''), flush=True))
+                        shell.run(*(ssh_cmd + ['ubuntu@' + instance.public_dns_name, remote_cmd(cmd), '2>/dev/null']),
+                                  callback=lambda x: print(color(x if quiet else name + x).replace('\r', ''), flush=True),
+                                  raw_cmd=True,
+                                  stream=False,
+                                  hide_stderr=quiet)
                     except:
                         failures.append(util.colors.red('failure: ') + instance.public_dns_name)
                     else:
@@ -159,16 +190,17 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, script='', yes=False, max
                     logging.info(' ' + msg)
             if failures:
                 sys.exit(1)
-        elif script:
-            shell.check_call(cmd % instances[0].public_dns_name, 'bash -s', stdin=script)
+        elif cmd:
+            shell.run(*(ssh_cmd + ['ubuntu@' + instances[0].public_dns_name, remote_cmd(cmd)]), echo=False, stream=True, hide_stderr=quiet, raw_cmd=True)
         else:
-            shell.check_call(cmd % instances[0].public_dns_name)
+            subprocess.check_call(ssh_cmd + ['ubuntu@' + instances[0].public_dns_name])
     except:
         sys.exit(1)
 
 
-def scp(src, dst, *tags, yes=False):
+def scp(src, dst, *tags, yes=False, max_threads=0):
     assert tags, 'you must specify some tags'
+    assert ':' in src + dst, 'you didnt specify a remote path, which starts with ":"'
     instances = _ls(tags, 'running')
     assert instances, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     logging.info('targeting:')
@@ -198,7 +230,7 @@ def scp(src, dst, *tags, yes=False):
         return fn
     failures = []
     successes = []
-    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors) if len(instances) > 1 else [False]))
+    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors) if len(instances) > 1 else [False]), max_threads=max_threads)
     logging.info('\nresults:')
     for msg in successes + failures:
         logging.info(' ' + msg)
@@ -207,7 +239,8 @@ def scp(src, dst, *tags, yes=False):
 
 
 # TODO when one instance only, dont colorize
-def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
+# TODO stop using bash -s
+def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_threads=0):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert instances, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
@@ -231,7 +264,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
         def fn():
             try:
                 shell.run('bash', script,
-                          '|ssh -o StrictHostKeyChecking=no ubuntu@' + instance.public_dns_name,
+                          '|ssh', ssh_args, 'ubuntu@' + instance.public_dns_name,
                           '"mkdir -p', dst, '&& cd', dst, '&& tar xf -"',
                           callback=lambda x: print(color(name + x), flush=True))
             except:
@@ -239,7 +272,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
             else:
                 successes.append(util.colors.green('success: ') + instance.public_dns_name)
         return fn
-    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors) if len(instances) > 1 else [False]))
+    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors) if len(instances) > 1 else [False]), max_threads=max_threads)
     shell.check_call('rm -rf', os.path.dirname(script))
     logging.info('\nresults:')
     for msg in successes + failures:
@@ -248,6 +281,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
         sys.exit(1)
 
 
+# TODO stop using bash -s
 def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
@@ -256,7 +290,7 @@ def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
     logging.info('targeting:\n %s', _pretty(instance))
     host = instance.public_dns_name
     script = _tar_script(src, name, echo_only=True)
-    cmd = 'cat %(script)s |ssh -o StrictHostKeyChecking=no ubuntu@%(host)s bash -s' % locals()
+    cmd = ('cat %(script)s |ssh' + ssh_args + 'ubuntu@%(host)s bash -s') % locals()
     logging.info('going to pull:')
     logging.info(util.strings.indent(shell.check_output(cmd), 1))
     shell.check_call('rm -rf', os.path.dirname(script))
@@ -264,7 +298,7 @@ def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     script = _tar_script(src, name)
-    cmd = 'cd %(dst)s && cat %(script)s | ssh -o StrictHostKeyChecking=no ubuntu@%(host)s bash -s | tar xf -' % locals()
+    cmd = ('cd %(dst)s && cat %(script)s | ssh' + ssh_args + 'ubuntu@%(host)s bash -s | tar xf -') % locals()
     try:
         shell.check_call(cmd)
     except:
@@ -274,7 +308,6 @@ def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
         shell.check_call('rm -rf', os.path.dirname(script))
 
 
-# TODO drop -name and use grep for include and exclude varargs.
 def _tar_script(src, name, echo_only=False):
     name = ('-name %s' % name) if name else ''
     script = ('cd %(src)s\n'
@@ -312,7 +345,7 @@ def mosh(*tags, first_n=None, last_n=None):
 
 def stop(*tags, yes=False, first_n=None, last_n=None, wait=False):
     assert tags, 'you cannot stop all things, specify some tags'
-    instances = _ls(tags, 'running', first_n, last_n)
+    instances = _ls(tags, ['running', 'stopped'], first_n, last_n)
     assert instances, 'didnt find any running instances for those tags'
     logging.info('going to stop the following instances:')
     for i in instances:
@@ -325,13 +358,13 @@ def stop(*tags, yes=False, first_n=None, last_n=None, wait=False):
         logging.info('stopped: %s', _pretty(i))
     if wait:
         logging.info('waiting for all to stop')
-        for i in instances:
-            i.wait_until_stopped()
+        _wait_until('stopped', *instances)
+
 
 def rm(*tags, yes=False, first_n=None, last_n=None):
     assert tags, 'you cannot stop all things, specify some tags'
     instances = _ls(tags, ['running', 'stopped'], first_n, last_n)
-    assert instances, 'didnt find any running instances for those tags'
+    assert instances, 'didnt find any instances for those tags'
     logging.info('going to terminate the following instances:')
     for i in instances:
         logging.info(' ' + _pretty(i))
@@ -342,37 +375,33 @@ def rm(*tags, yes=False, first_n=None, last_n=None):
         i.terminate()
         logging.info('terminated: %s', _pretty(i))
 
-def _wait_for_ip(*ids):
-    instances = _ls_by_ids(*ids)
-    for i in instances:
-        i.wait_until_running()
-    return [i.public_dns_name for i in instances]
+
+def _ls_by_ids(*ids):
+    return _resource().instances.filter(Filters=[{'Name': 'instance-id', 'Values': ids}])
 
 
-def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):
-    assert tags, 'you cannot start all things, specify some tags'
-    instances = _ls(tags, 'stopped', first_n, last_n)
-    assert instances, 'didnt find any stopped instances for those tags'
-    logging.info('going to start the following instances:')
-    for i in instances:
-        logging.info(' ' + _pretty(i))
-    if not yes:
-        logging.info('\nwould you like to proceed? y/n\n')
-        assert pager.getch() == 'y', 'abort'
-    for i in instances:
-        i.start()
-        logging.info('started: %s', _pretty(i))
-    if ssh:
-        assert len(instances) == 1, util.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
+def _wait_until(state, *instances):
+    assert state in ['running', 'stopped']
+    _client().get_waiter('instance_' + state).wait(InstanceIds=[i.instance_id for i in instances])
+
+
+def _wait_for_ssh(*instances):
+    logging.info('wait for state=running...')
+    _wait_until('running', *instances)
+    logging.info('wait for ssh connectivity...')
+    timeout = 10
+    for _ in range(30):
+        start = time.time()
         try:
-            instances[0].wait_until_running()
-            shell.check_call('ssh -o StrictHostKeyChecking=no -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], echo=True)
+            with util.time.timeout(timeout):
+                ssh(*[i.instance_id for i in instances], cmd='whoami > /dev/null', yes=True, quiet=True)
+            for i in instances:
+                i.reload()
+            return [i.public_dns_name for i in instances]
         except:
-            sys.exit(1)
-    elif wait:
-        logging.info('waiting for all to start')
-        for i in instances:
-            i.wait_until_running()
+            logging.info('retrying ssh connectivity...')
+            time.sleep(max(0, timeout - (time.time() - start)))
+    assert False
 
 
 def untag(ls_tags, unset_tags, yes=False, first_n=None, last_n=None):
@@ -413,20 +442,23 @@ def tag(ls_tags, set_tags, yes=False, first_n=None, last_n=None):
             logging.info('tagged: %s', _pretty(i))
 
 
-def wait(*tags, state='running', yes=False, first_n=None, last_n=None):
+def wait(*tags, state='running', yes=False, first_n=None, last_n=None, ssh=False):
     assert state in ['running', 'stopped']
     assert tags, 'you cannot wait for all things, specify some tags'
     instances = _ls(tags, 'all', first_n, last_n)
     assert instances, 'didnt find any running instances for those tags'
-    logging.info('going to wait the following instances to be %s:', state)
+    logging.info('going to wait the following instances to be %s:', 'ssh-able' if ssh else state)
     for i in instances:
         logging.info(' ' + _pretty(i))
     if not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-    for i in instances:
-        getattr(i, 'wait_until_%s' % state)()
-        logging.info('%s is %s', _pretty(i), state)
+    if ssh:
+        _wait_for_ssh(*instances)
+    else:
+        _wait_until(state, *instances)
+        for i in instances:
+            logging.info('%s is %s', _pretty(i), state)
 
 
 def reboot(*tags, yes=False, first_n=None, last_n=None):
@@ -468,7 +500,7 @@ def auths(ip):
 
 
 def _sgs(names=None):
-    sgs = _ec2().security_groups.all()
+    sgs = _resource().security_groups.all()
     if names:
         sgs = [x for x in sgs if x.group_name in names]
     return sgs
@@ -528,30 +560,30 @@ def revoke(ip, *names, yes=False):
 
 def amis(*name_fragments):
     name_fragments = ('ubuntu/images/',) + name_fragments
-    amis = list(_ec2().images.filter(Owners=['099720109477'],
-                                     Filters=[{'Name': 'name',
-                                               'Values': ['*%s*' % '*'.join(name_fragments)]},
-                                              {'Name': 'architecture',
-                                               'Values': ['x86_64']},
-                                              {'Name': 'virtualization-type',
-                                               'Values': ['hvm']}]))
+    amis = list(_resource().images.filter(Owners=['099720109477'],
+                                          Filters=[{'Name': 'name',
+                                                    'Values': ['*%s*' % '*'.join(name_fragments)]},
+                                                   {'Name': 'architecture',
+                                                    'Values': ['x86_64']},
+                                                   {'Name': 'virtualization-type',
+                                                    'Values': ['hvm']}]))
     for name, xs in util.iter.groupby(amis, key=lambda x: x.name.split('-')[:-1]):
         ami = sorted(xs, key=lambda x: x.creation_date)[-1]
-        logging.info('%s %s', util.colors.green(ami.image_id), '-'.join(name))
+        print('%s %s' % (util.colors.green(ami.image_id), '-'.join(name)))
 
 
 def keys():
-    for key in _ec2().key_pairs.all():
+    for key in _resource().key_pairs.all():
         logging.info(key.name)
 
 
 def vpcs():
-    for vpc in _ec2().vpcs.all():
+    for vpc in _resource().vpcs.all():
         logging.info('%s subnets: %s', _name(vpc), ' '.join([x.id for x in vpc.subnets.all()]))
 
 
 def _subnet(vpc):
-    vpcs = list(_ec2().vpcs.filter(Filters=[{'Name': 'tag:Name', 'Values': [vpc]}]))
+    vpcs = list(_resource().vpcs.filter(Filters=[{'Name': 'tag:Name', 'Values': [vpc]}]))
     assert len(vpcs) == 1, vpcs
     subnets = list(vpcs[0].subnets.all())
     assert len(subnets) == 1, subnets
@@ -561,53 +593,88 @@ def _subnet(vpc):
 def _blocks(gigs):
     return [{'DeviceName': '/dev/sda1',
              'Ebs': {'VolumeSize': int(gigs),
+                     'VolumeType': 'gp2',
                      'DeleteOnTermination': True}}]
 
 
-_default_init = """#!/usr/bin/python
-import time
-open('/tmp/cloudinit.log', 'a').write('init %s' % time.time())
-"""
-
-@argh.arg('name', help='name of the instance')
-@argh.arg('--key', help='key pair name', default=shell.conf.get_or_prompt_pref('key', __file__, message='key pair name'))
-@argh.arg('--ami', help='ami id', default=shell.conf.get_or_prompt_pref('ami', __file__, message='ami id'))
-@argh.arg('--sg', help='security group name', default=shell.conf.get_or_prompt_pref('sg', __file__, message='security group name'))
-@argh.arg('--type', help='instance type', default=shell.conf.get_or_prompt_pref('type', __file__, message='instance type'))
-@argh.arg('--vpc', help='vpc name', default=shell.conf.get_or_prompt_pref('vpc', __file__, message='vpc name'))
-@argh.arg('--gigs', help='gb capacity of primary disk', default=16)
-@argh.arg('--init', help='cloud init string', default=None)
-@argh.arg('--num', help='number of instances', default=1)
-@argh.arg('--wait', help='wait for state=running', default=False)
-@argh.arg('--ssh', help='ssh into the instance', default=False)
-def new(**kw):
+def new(name:  'name of the instance',
+        *tags: 'tags to set as "<key>=<value>"',
+        key:   'key pair name'               = shell.conf.get_or_prompt_pref('key', __file__, message='key pair name'),
+        ami:   'ami id'                      = shell.conf.get_or_prompt_pref('ami', __file__, message='ami id'),
+        sg:    'security group name'         = shell.conf.get_or_prompt_pref('sg', __file__, message='security group name'),
+        type:  'instance type'               = shell.conf.get_or_prompt_pref('type', __file__, message='instance type'),
+        vpc:   'vpc name'                    = shell.conf.get_or_prompt_pref('vpc', __file__, message='vpc name'),
+        gigs:  'gb capacity of primary disk' = 16,
+        init:  'cloud init command'          = 'date > /tmp/cloudinit.log',
+        cmd:   'ssh command'                 = None,
+        num:   'number of instances'         = 1,
+        ssh:   'ssh into the instance'       = False):
+    assert not ssh or num == 1, util.colors.red('you asked to ssh, but you are starting more than one instance, so its not gonna happen')
     owner = shell.run('whoami')
-    instances = _ec2().create_instances(UserData=kw['init'] or _default_init,
-                                        ImageId=kw['ami'],
-                                        MinCount=kw['num'],
-                                        MaxCount=kw['num'],
-                                        KeyName=kw['key'],
-                                        SecurityGroupIds=[x.id for x in _sgs(names=[kw['sg']])],
-                                        InstanceType=kw['type'],
-                                        SubnetId=_subnet(kw['vpc']),
-                                        BlockDeviceMappings=_blocks(kw['gigs']))
+    assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
+    for tag in tags:
+        assert '=' in tag, 'bad tag, should be key=value, not: %s' % tag
+    # TODO being root is not ideal. sudo -u ubuntu ...
+    init = '#!/bin/bash\n' + init
+    opts = {}
+    opts['UserData'] = init
+    opts['ImageId'] = ami
+    opts['MinCount'] = num
+    opts['MaxCount'] = num
+    opts['KeyName'] = key
+    opts['SecurityGroupIds'] = [x.id for x in _sgs(names=[sg])]
+    opts['InstanceType'] = type
+    opts['BlockDeviceMappings'] = _blocks(gigs)
+    if vpc:
+        opts['SubnetId'] = _subnet(vpc)
+    logging.info('create instances:\n' + pprint.pformat(opts))
+    instances = _resource().create_instances(**opts)
     date = str(datetime.datetime.now()).replace(' ', 'T')
     for n, i in enumerate(instances):
-        tags = [{'Key': 'Name', 'Value': kw['name']},
-                {'Key': 'owner', 'Value': owner},
-                {'Key': 'nth', 'Value': str(n)},
-                {'Key': 'num', 'Value': str(kw['num'])},
-                {'Key': 'creation-date', 'Value': date}]
-        i.create_tags(Tags=tags)
+        set_tags = [{'Key': 'Name', 'Value': name},
+                    {'Key': 'owner', 'Value': owner},
+                    {'Key': 'creation-date', 'Value': date}]
+        if len(instances) > 1:
+            set_tags += [{'Key': 'nth', 'Value': str(n)},
+                         {'Key': 'num', 'Value': str(num)}]
+        for tag in tags:
+            k, v = tag.split('=')
+            set_tags.append({'Key': k, 'Value': v})
+        i.create_tags(Tags=set_tags)
         logging.info('tagged: %s', _pretty(i))
-    if kw['ssh']:
+    _wait_for_ssh(*instances)
+    if ssh:
+        logging.info('logging in via ssh...')
+        ssh(instances[0].instance_id, yes=True, quiet=True)
+    elif cmd:
+        logging.info('running cmd...')
+        ssh(*[i.instance_id for i in instances], yes=True, cmd=cmd)
+    logging.info('done')
+    for i in instances:
+        print(i.instance_id)
+
+
+def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):
+    assert tags, 'you cannot start all things, specify some tags'
+    instances = _ls(tags, 'stopped', first_n, last_n)
+    assert instances, 'didnt find any stopped instances for those tags'
+    logging.info('going to start the following instances:')
+    for i in instances:
+        logging.info(' ' + _pretty(i))
+    if not yes:
+        logging.info('\nwould you like to proceed? y/n\n')
+        assert pager.getch() == 'y', 'abort'
+    for i in instances:
+        i.start()
+        logging.info('started: %s', _pretty(i))
+    if ssh:
         assert len(instances) == 1, util.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
+        instances[0].wait_until_running()
         try:
-            instances[0].wait_until_running()
-            shell.check_call('ssh -o StrictHostKeyChecking=no -A ubuntu@%s' % _wait_for_ip(instances[0].instance_id)[0], echo=True)
+            shell.check_call('ssh -A' + ssh_args + 'ubuntu@%s' % _wait_for_ssh(*instances)[0], echo=True)
         except:
             sys.exit(1)
-    elif kw['wait']:
+    elif wait:
         logging.info('waiting for all to start')
         for i in instances:
             i.wait_until_running()
@@ -615,7 +682,6 @@ def new(**kw):
 
 def main():
     shell.ignore_closed_pipes()
-    util.log.setup(format='%(message)s')
     with util.log.disable('botocore', 'boto3'):
         try:
             stream = util.hacks.override('--stream')

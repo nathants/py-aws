@@ -1,6 +1,5 @@
-import boto3
-import subprocess
 import base64
+import boto3
 import datetime
 import itertools
 import logging
@@ -9,9 +8,11 @@ import os
 import pager
 import pool.thread
 import pprint
+import random
 import re
 import shell
 import shell.conf
+import subprocess
 import sys
 import time
 import util.cached
@@ -149,7 +150,7 @@ def remote_cmd(cmd):
     return "bash -c 'path=/tmp/$(uuidgen); echo %s | base64 -d > $path || exit 1; bash $path; code=$?; rm $path; exit $code'" % b64_encode(cmd)
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=0):
+def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     if os.path.isfile(cmd):
@@ -160,6 +161,8 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
         for i in instances:
             logging.info(_pretty(i))
     ssh_cmd = ('ssh -ttA' + ssh_args).split()
+    if timeout:
+        ssh_cmd = ['timeout', '{}s'.format(timeout)] + ssh_cmd
     if not yes and not (len(instances) == 1 and not cmd):
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
@@ -389,12 +392,11 @@ def _wait_for_ssh(*instances):
     logging.info('wait for state=running...')
     _wait_until('running', *instances)
     logging.info('wait for ssh connectivity...')
-    timeout = 10
     for _ in range(30):
+        timeout = 3 + random.random()
         start = time.time()
         try:
-            with util.time.timeout(timeout):
-                ssh(*[i.instance_id for i in instances], cmd='whoami > /dev/null', yes=True, quiet=True)
+            ssh(*[i.instance_id for i in instances], cmd='whoami > /dev/null', yes=True, quiet=True, timeout=timeout)
             for i in instances:
                 i.reload()
             return [i.public_dns_name for i in instances]
@@ -599,17 +601,17 @@ def _blocks(gigs):
 
 def new(name:  'name of the instance',
         *tags: 'tags to set as "<key>=<value>"',
-        key:   'key pair name'               = shell.conf.get_or_prompt_pref('key', __file__, message='key pair name'),
-        ami:   'ami id'                      = shell.conf.get_or_prompt_pref('ami', __file__, message='ami id'),
-        sg:    'security group name'         = shell.conf.get_or_prompt_pref('sg', __file__, message='security group name'),
+        key:   'key pair name'               = shell.conf.get_or_prompt_pref('key',  __file__, message='key pair name'),
+        ami:   'ami id'                      = shell.conf.get_or_prompt_pref('ami',  __file__, message='ami id'),
+        sg:    'security group name'         = shell.conf.get_or_prompt_pref('sg',   __file__, message='security group name'),
         type:  'instance type'               = shell.conf.get_or_prompt_pref('type', __file__, message='instance type'),
-        vpc:   'vpc name'                    = shell.conf.get_or_prompt_pref('vpc', __file__, message='vpc name'),
+        vpc:   'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  __file__, message='vpc name'),
         gigs:  'gb capacity of primary disk' = 16,
         init:  'cloud init command'          = 'date > /tmp/cloudinit.log',
         cmd:   'ssh command'                 = None,
         num:   'number of instances'         = 1,
-        ssh:   'ssh into the instance'       = False):
-    assert not ssh or num == 1, util.colors.red('you asked to ssh, but you are starting more than one instance, so its not gonna happen')
+        login: 'login into the instance'     = False):
+    assert not login or num == 1, util.colors.red('you asked to login, but you are starting more than one instance, so its not gonna happen')
     owner = shell.run('whoami')
     assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
     for tag in tags:
@@ -643,15 +645,14 @@ def new(name:  'name of the instance',
         i.create_tags(Tags=set_tags)
         logging.info('tagged: %s', _pretty(i))
     _wait_for_ssh(*instances)
-    if ssh:
-        logging.info('logging in via ssh...')
+    if login:
+        logging.info('logging in via login...')
         ssh(instances[0].instance_id, yes=True, quiet=True)
     elif cmd:
         logging.info('running cmd...')
         ssh(*[i.instance_id for i in instances], yes=True, cmd=cmd)
     logging.info('done')
-    for i in instances:
-        print(i.instance_id)
+    return [i.instance_id for i in instances]
 
 
 def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):

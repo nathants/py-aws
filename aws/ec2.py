@@ -150,7 +150,10 @@ def remote_cmd(cmd):
     return "bash -c 'path=/tmp/$(uuidgen); echo %s | base64 -d > $path || exit 1; bash $path; code=$?; rm $path; exit $code'" % b64_encode(cmd)
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None):
+def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, tty=True):
+    """
+    tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
+    """
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     if os.path.isfile(cmd):
@@ -160,7 +163,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
     if not (quiet and yes):
         for i in instances:
             logging.info(_pretty(i))
-    ssh_cmd = ('ssh -ttA' + ssh_args).split()
+    ssh_cmd = ('ssh -A ' + ('-tt' if tty or not cmd else '-T') + ssh_args).split()
     if timeout:
         ssh_cmd = ['timeout', '{}s'.format(timeout)] + ssh_cmd
     if not yes and not (len(instances) == 1 and not cmd):
@@ -650,7 +653,7 @@ def new(name:  'name of the instance',
         ssh(instances[0].instance_id, yes=True, quiet=True)
     elif cmd:
         logging.info('running cmd...')
-        ssh(*[i.instance_id for i in instances], yes=True, cmd=cmd)
+        ssh(*[i.instance_id for i in instances], yes=True, cmd=cmd, tty=False) # because nohups? is this always ok? just use for nohup/log/halt?
     logging.info('done')
     return [i.instance_id for i in instances]
 

@@ -142,12 +142,8 @@ def ls(*tags, state='all', first_n=None, last_n=None):
     print(x, flush=True)
 
 
-def b64_encode(x):
-    return base64.b64encode(bytes(x, 'utf-8')).decode('utf-8')
-
-
-def remote_cmd(cmd):
-    return "bash -c 'path=/tmp/$(uuidgen); echo %s | base64 -d > $path || exit 1; bash $path; code=$?; rm $path; exit $code'" % b64_encode(cmd)
+def _remote_cmd(cmd):
+    return "bash -c 'path=/tmp/$(uuidgen); echo %s | base64 -d > $path || exit 1; bash $path; code=$?; rm $path; exit $code'" % util.strings.b64_encode(cmd)
 
 
 def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, tty=True):
@@ -179,7 +175,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
                 name = (_name(instance) + ': ' + instance.public_dns_name + ': ')
                 def fn():
                     try:
-                        shell.run(*(ssh_cmd + ['ubuntu@' + instance.public_dns_name, remote_cmd(cmd), '2>/dev/null']),
+                        shell.run(*(ssh_cmd + ['ubuntu@' + instance.public_dns_name, _remote_cmd(cmd), '2>/dev/null']),
                                   callback=lambda x: print(color(x if quiet else name + x).replace('\r', ''), flush=True),
                                   raw_cmd=True,
                                   stream=False,
@@ -197,7 +193,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
             if failures:
                 sys.exit(1)
         elif cmd:
-            shell.run(*(ssh_cmd + ['ubuntu@' + instances[0].public_dns_name, remote_cmd(cmd)]), echo=False, stream=True, hide_stderr=quiet, raw_cmd=True)
+            shell.run(*(ssh_cmd + ['ubuntu@' + instances[0].public_dns_name, _remote_cmd(cmd)]), echo=False, stream=True, hide_stderr=quiet, raw_cmd=True)
         else:
             subprocess.check_call(ssh_cmd + ['ubuntu@' + instances[0].public_dns_name])
     except:

@@ -1,4 +1,4 @@
-import base64
+import argh
 import boto3
 import datetime
 import itertools
@@ -15,8 +15,10 @@ import shell.conf
 import subprocess
 import sys
 import time
+import traceback
 import util.cached
 import util.colors
+import util.dicts
 import util.exceptions
 import util.iter
 import util.log
@@ -143,10 +145,12 @@ def ls(*tags, state='all', first_n=None, last_n=None):
 
 
 def _remote_cmd(cmd):
-    return "bash -c 'path=/tmp/$(uuidgen); echo %s | base64 -d > $path || exit 1; bash $path; code=$?; rm $path; exit $code'" % util.strings.b64_encode(cmd)
+    # TODO is hygiene more important than debugability? rm $path
+    # return "path=/tmp/$(uuidgen); echo %s | base64 -d > $path; bash $path; code=$?; rm $path; exit $code" % util.strings.b64_encode(cmd)
+    return "path=/tmp/$(uuidgen); echo %s | base64 -d > $path; bash $path" % util.strings.b64_encode(cmd)
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, tty=True):
+def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, no_tty=False):
     """
     tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     """
@@ -159,7 +163,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
     if not (quiet and yes):
         for i in instances:
             logging.info(_pretty(i))
-    ssh_cmd = ('ssh -A ' + ('-tt' if tty or not cmd else '-T') + ssh_args).split()
+    ssh_cmd = ('ssh -A ' + ('-tt' if not no_tty or not cmd else '-T') + ssh_args).split()
     if timeout:
         ssh_cmd = ['timeout', '{}s'.format(timeout)] + ssh_cmd
     if not yes and not (len(instances) == 1 and not cmd):
@@ -197,6 +201,77 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
         else:
             subprocess.check_call(ssh_cmd + ['ubuntu@' + instances[0].public_dns_name])
     except:
+        sys.exit(1)
+
+
+def _launch_cmd(arg, cmd, no_rm, bucket):
+    # TODO how to make this more understandable?
+    if callable(cmd):
+        _cmd = cmd(str(arg))
+    else:
+        _cmd = cmd % {'arg': arg}
+    upload_logs = 'aws s3 cp ~/nohup.out s3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s_%(ip)s >/dev/null 2>&1' % {
+        'bucket': bucket,
+        'user': os.environ['USER'],
+        'date': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
+        'ip': '$(curl http://169.254.169.254/latest/meta-data/public-hostname/ 2>/dev/null)',
+        'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s" % x for x in json.load(sys.stdin)["Tags"] if x["Key"] != "creation-date"]))\')', # noqa
+    }
+    return "(%(cmd)s; echo exited $?; %(upload_logs)s; %(shutdown)s) >nohup.out 2>nohup.out </dev/null &" % {
+        'cmd': _cmd,
+        'upload_logs': upload_logs,
+        'shutdown': ('sudo halt'
+                     if no_rm else
+                     'aws ec2 terminate-instances --instance-ids $(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)'),
+    }
+
+
+@argh.arg('--tag', action='append')
+def launch(name:    'name of all instances',
+           *args:   'one instance per arg, and that arg is str formatted into cmd, pre_cmd, and tags via %(arg)s',
+           pre_cmd: 'optional cmd which runs before cmd is backgrounded' = None,
+           cmd:     'cmd which is run in the background' = None,
+           tag:     'tag to set as "<key>=<value>' = None,
+           no_rm:   'stop instance instead of terminating when done' = False,
+           bucket:  's3 bucket to upload logs to' = shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
+           # following opts are copied verbatim from ec2.new
+           key:     'key pair name'               = shell.conf.get_or_prompt_pref('key',  __file__, message='key pair name'),
+           ami:     'ami id'                      = shell.conf.get_or_prompt_pref('ami',  __file__, message='ami id'),
+           sg:      'security group name'         = shell.conf.get_or_prompt_pref('sg',   __file__, message='security group name'),
+           type:    'instance type'               = shell.conf.get_or_prompt_pref('type', __file__, message='instance type'),
+           vpc:     'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  __file__, message='vpc name'),
+           gigs:    'gb capacity of primary disk' = 16):
+    instance_ids = new(name,
+                       key=key,
+                       ami=ami,
+                       sg=sg,
+                       type=type,
+                       vpc=vpc,
+                       gigs=gigs,
+                       num=len(args))
+    errors = []
+    def run_cmd(instance_id, arg):
+        def fn():
+            try:
+                # TODO callback to prefix output with instance-id, ala `ec2.ssh`
+                if pre_cmd:
+                    ssh(instance_id, yes=True, cmd=pre_cmd % {'arg': arg})
+                ssh(instance_id, no_tty=True, yes=True, cmd=_launch_cmd(arg, cmd, no_rm, bucket))
+                if tag:
+                    instance = _ls([instance_id])[0]
+                    instance.create_tags(Tags=[{'Key': k, 'Value': v}
+                                               for t in tag
+                                               for [k, v] in [(t % {'arg': arg}).split('=')]])
+                    logging.info('tagged: %s', _pretty(instance))
+                logging.info('ran cmd against %s for arg %s', instance_id, arg)
+            except:
+                errors.append(traceback.format_exc())
+        return fn
+    pool.thread.wait(*map(run_cmd, instance_ids, args))
+    if errors:
+        logging.info(util.colors.red('errors:'))
+        for e in errors:
+            logging.info(e)
         sys.exit(1)
 
 
@@ -390,7 +465,7 @@ def _wait_until(state, *instances):
 def _wait_for_ssh(*instances):
     logging.info('wait for state=running...')
     _wait_until('running', *instances)
-    logging.info('wait for ssh connectivity...')
+    logging.info('wait for ssh...')
     for _ in range(30):
         timeout = 3 + random.random()
         start = time.time()
@@ -400,7 +475,7 @@ def _wait_for_ssh(*instances):
                 i.reload()
             return [i.public_dns_name for i in instances]
         except:
-            logging.info('retrying ssh connectivity...')
+            logging.info('trying ssh...')
             time.sleep(max(0, timeout - (time.time() - start)))
     assert False
 
@@ -609,6 +684,7 @@ def new(name:  'name of the instance',
         init:  'cloud init command'          = 'date > /tmp/cloudinit.log',
         cmd:   'ssh command'                 = None,
         num:   'number of instances'         = 1,
+        tty:   'run cmd in a tty'            = False,
         login: 'login into the instance'     = False):
     assert not login or num == 1, util.colors.red('you asked to login, but you are starting more than one instance, so its not gonna happen')
     owner = shell.run('whoami')
@@ -628,7 +704,7 @@ def new(name:  'name of the instance',
     opts['BlockDeviceMappings'] = _blocks(gigs)
     if vpc:
         opts['SubnetId'] = _subnet(vpc)
-    logging.info('create instances:\n' + pprint.pformat(opts))
+    logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
     instances = _resource().create_instances(**opts)
     date = str(datetime.datetime.now()).replace(' ', 'T')
     for n, i in enumerate(instances):
@@ -649,7 +725,7 @@ def new(name:  'name of the instance',
         ssh(instances[0].instance_id, yes=True, quiet=True)
     elif cmd:
         logging.info('running cmd...')
-        ssh(*[i.instance_id for i in instances], yes=True, cmd=cmd, tty=False) # because nohups? is this always ok? just use for nohup/log/halt?
+        ssh(*[i.instance_id for i in instances], yes=True, cmd=cmd, no_tty=not tty)
     logging.info('done')
     return [i.instance_id for i in instances]
 

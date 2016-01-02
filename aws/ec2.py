@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import traceback
+import uuid
 import util.cached
 import util.colors
 import util.dicts
@@ -250,6 +251,9 @@ def launch(name:    'name of all instances',
                        gigs=gigs,
                        num=len(args))
     errors = []
+    launch_id = str(uuid.uuid4())
+    logging.info('launch id: %s', launch_id)
+    tag = tag or [] + ['launch=%s' % launch_id]
     def run_cmd(instance_id, arg):
         def fn():
             try:
@@ -257,12 +261,11 @@ def launch(name:    'name of all instances',
                 if pre_cmd:
                     ssh(instance_id, yes=True, cmd=pre_cmd % {'arg': arg})
                 ssh(instance_id, no_tty=True, yes=True, cmd=_launch_cmd(arg, cmd, no_rm, bucket))
-                if tag:
-                    instance = _ls([instance_id])[0]
-                    instance.create_tags(Tags=[{'Key': k, 'Value': v}
-                                               for t in tag
-                                               for [k, v] in [(t % {'arg': arg}).split('=')]])
-                    logging.info('tagged: %s', _pretty(instance))
+                instance = _ls([instance_id])[0]
+                instance.create_tags(Tags=[{'Key': k, 'Value': v}
+                                           for t in tag + ['arg=%s' % arg]
+                                           for [k, v] in [(t % {'arg': arg}).split('=')]])
+                logging.info('tagged: %s', _pretty(instance))
                 logging.info('ran cmd against %s for arg %s', instance_id, arg)
             except:
                 errors.append(traceback.format_exc())
@@ -273,6 +276,19 @@ def launch(name:    'name of all instances',
         for e in errors:
             logging.info(e)
         sys.exit(1)
+
+
+def launch_logs(*tags,
+                index=-1,
+                bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
+    owner = shell.run('whoami')
+    prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
+    ks = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
+    ks = [k.split()[-1] for k in ks]
+    ks = [k for k in ks
+          if all(t in k for t in tags)]
+    k = ks[index]
+    shell.call('aws s3 cp s3://%(prefix)s%(k)s - | less -R' % locals())
 
 
 def scp(src, dst, *tags, yes=False, max_threads=0):

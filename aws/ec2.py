@@ -216,7 +216,7 @@ def _launch_cmd(arg, cmd, no_rm, bucket):
         'user': os.environ['USER'],
         'date': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
         'ip': '$(curl http://169.254.169.254/latest/meta-data/public-hostname/ 2>/dev/null)',
-        'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s" % x for x in json.load(sys.stdin)["Tags"] if x["Key"] != "creation-date"]))\')', # noqa
+        'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s" % x for x in json.load(sys.stdin)["Tags"] if x["Key"] != "creation-date"]).replace("_", "-"))\')', # noqa
     }
     return "(%(cmd)s; echo exited $?; %(upload_logs)s; %(shutdown)s) >nohup.out 2>nohup.out </dev/null &" % {
         'cmd': _cmd,
@@ -227,6 +227,7 @@ def _launch_cmd(arg, cmd, no_rm, bucket):
     }
 
 
+# TODO move launch out of `ec2` and into a `launch` cli?
 @argh.arg('--tag', action='append')
 def launch(name:    'name of all instances',
            *args:   'one instance per arg, and that arg is str formatted into cmd, pre_cmd, and tags via %(arg)s',
@@ -278,9 +279,23 @@ def launch(name:    'name of all instances',
         sys.exit(1)
 
 
-def launch_logs(*tags,
-                index=-1,
-                bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
+def launch_ls_logs(owner=None,
+                   bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
+    owner = owner or shell.run('whoami')
+    prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
+    ks = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
+    ks = [k.split()[-1] for k in ks]
+    for k in ks:
+        try:
+            date, tags, ip = k.split('_')
+        except ValueError:
+            continue
+        print(tags.replace(',', ' '))
+
+
+def launch_log(*tags,
+               index=-1,
+               bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
     owner = shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
     ks = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
@@ -289,6 +304,30 @@ def launch_logs(*tags,
           if all(t in k for t in tags)]
     k = ks[index]
     shell.call('aws s3 cp s3://%(prefix)s%(k)s - | less -R' % locals())
+
+
+def launch_logs(cmd,
+                *tags,
+                max_threads=10,
+                bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
+    owner = shell.run('whoami')
+    prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
+    ks = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
+    ks = [k.split()[-1] for k in ks]
+    ks = [k for k in ks
+          if all(t in k for t in tags)]
+    fail = False
+    def f(k, cmd, prefix):
+        date, tags, ip = k.split('_')
+        arg = [x for x in tags.split(',') if x.startswith('arg=')][0]
+        try:
+            print('[%s exit 0]' % arg, shell.run('aws s3 cp s3://%(prefix)s%(k)s - | %(cmd)s' % locals()))
+        except AssertionError:
+            print('[%s exit 1]' % arg)
+            fail = True
+    pool.thread.wait(*[(f, [k, cmd, prefix]) for k in ks], max_threads=max_threads)
+    if fail:
+        sys.exit(1)
 
 
 def scp(src, dst, *tags, yes=False, max_threads=0):

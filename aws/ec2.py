@@ -104,25 +104,25 @@ def _matches(instance, tags):
     return True
 
 
-def _pretty(instance):
+def _pretty(instance, ip=False, all_tags=False):
     if instance.state['Name'] == 'running':
         color = util.colors.green
     elif instance.state['Name'] == 'pending':
         color = util.colors.cyan
     else:
         color = util.colors.red
-    return ' '.join([
+    return ' '.join(filter(None, [
         color(_name(instance)),
         instance.instance_type,
         instance.state['Name'],
         instance.instance_id,
-        instance.public_dns_name or '<no-ip>',
+        (instance.public_dns_name or '<no-ip>' if ip else None),
         ','.join([x['GroupName'] for x in instance.security_groups]),
         ' '.join('%s=%s' % (k, v)
                  for k, v in sorted(_tags(instance).items(), key=lambda x: x[0])
-                 if k not in ['Name', 'creation-date']
+                 if (all_tags or k not in ['Name', 'creation-date', 'owner', 'launch'])
                  and v),
-    ])
+    ]))
 
 def _name(instance):
     return _tags(instance).get('Name', '<no-name>').replace(' ', '_')
@@ -137,11 +137,10 @@ def ip(*tags, first_n=None, last_n=None):
         print(i.public_dns_name, flush=True)
 
 
-def ls(*tags, state='all', first_n=None, last_n=None):
+def ls(*tags, state='all', first_n=None, last_n=None, ip=False, all_tags=False):
     x = _ls(tags, state, first_n, last_n)
-    x = map(_pretty, x)
+    x = map(lambda y: _pretty(y, ip=ip, all_tags=all_tags), x)
     x = '\n'.join(x)
-    x = util.strings.align(x)
     print(x, flush=True)
 
 
@@ -228,6 +227,7 @@ def _launch_cmd(arg, cmd, no_rm, bucket):
 
 
 # TODO move launch out of `ec2` and into a `launch` cli?
+# TODO consider chunking logs, or at least uploading the last 1000 log lines as a distinct thing. usually we only care about the end.
 @argh.arg('--tag', action='append')
 def launch(name:    'name of all instances',
            *args:   'one instance per arg, and that arg is str formatted into cmd, pre_cmd, and tags via %(arg)s',
@@ -253,8 +253,7 @@ def launch(name:    'name of all instances',
                        num=len(args))
     errors = []
     launch_id = str(uuid.uuid4())
-    logging.info('launch id: %s', launch_id)
-    tag = tag or [] + ['launch=%s' % launch_id]
+    tag = (tag or []) + ['launch=%s' % launch_id]
     def run_cmd(instance_id, arg):
         def fn():
             try:
@@ -272,11 +271,14 @@ def launch(name:    'name of all instances',
                 errors.append(traceback.format_exc())
         return fn
     pool.thread.wait(*map(run_cmd, instance_ids, args))
-    if errors:
-        logging.info(util.colors.red('errors:'))
-        for e in errors:
-            logging.info(e)
-        sys.exit(1)
+    try:
+        if errors:
+            logging.info(util.colors.red('errors:'))
+            for e in errors:
+                logging.info(e)
+            sys.exit(1)
+    finally:
+        logging.info('launch id: %s', launch_id)
 
 
 def launch_ls_logs(owner=None,
@@ -728,6 +730,29 @@ def _blocks(gigs):
                      'DeleteOnTermination': True}}]
 
 
+def _create_spot_instances(**opts):
+    request_ids = [x['SpotInstanceRequestId'] for x in _client().request_spot_instances(**opts)['SpotInstanceRequests']]
+    logging.info("wait for spot request to be filled for ids: %s", ' '.join(request_ids))
+    _client().get_waiter('spot_instance_request_fulfilled').wait(SpotInstanceRequestIds=request_ids)
+    instance_ids = [x['InstanceId'] for x in _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)['SpotInstanceRequests']]
+    logging.info('request fulfilled with instance-ids: %s', ' '.join(instance_ids))
+    logging.info('wait for instances...')
+    _client().get_waiter('instance_running').wait(InstanceIds=instance_ids)
+    instances = _ls(instance_ids)
+    assert len(instances) == opts['InstanceCount'], 'num instances: %s != %s' % (len(instances), opts['InstanceCount'])
+    return instances
+
+
+def _make_spot_opts(spot, **opts):
+    spot_opts = {}
+    spot_opts['SpotPrice'] = str(float(spot))
+    spot_opts['InstanceCount'] = opts['MaxCount']
+    specs = ['ImageId', 'KeyName', 'SecurityGroupIds', 'UserData', 'BlockDeviceMappings', 'SubnetId', 'InstanceType']
+    spot_opts['LaunchSpecification'] = specs = util.dicts.take(opts, specs)
+    spot_opts = util.dicts.update_in(spot_opts, ['LaunchSpecification', 'UserData'], util.strings.b64_encode)
+    return spot_opts
+
+
 def new(name:  'name of the instance',
         *tags: 'tags to set as "<key>=<value>"',
         key:   'key pair name'               = shell.conf.get_or_prompt_pref('key',  __file__, message='key pair name'),
@@ -739,14 +764,17 @@ def new(name:  'name of the instance',
         init:  'cloud init command'          = 'date > /tmp/cloudinit.log',
         cmd:   'ssh command'                 = None,
         num:   'number of instances'         = 1,
+        spot:  'spot price to bid'           = None,
         tty:   'run cmd in a tty'            = False,
         login: 'login into the instance'     = False):
+    if vpc.lower() == 'none':
+        vpc = None
     assert not login or num == 1, util.colors.red('you asked to login, but you are starting more than one instance, so its not gonna happen')
     owner = shell.run('whoami')
-    assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
     for tag in tags:
         assert '=' in tag, 'bad tag, should be key=value, not: %s' % tag
     # TODO being root is not ideal. sudo -u ubuntu ...
+    assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
     init = '#!/bin/bash\n' + init
     opts = {}
     opts['UserData'] = init
@@ -759,8 +787,14 @@ def new(name:  'name of the instance',
     opts['BlockDeviceMappings'] = _blocks(gigs)
     if vpc:
         opts['SubnetId'] = _subnet(vpc)
-    logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
-    instances = _resource().create_instances(**opts)
+    if spot:
+        spot_opts = _make_spot_opts(spot, **opts)
+        logging.info('request spot instances:\n' + pprint.pformat(util.dicts.drop(spot_opts, ['UserData'])))
+        instances = _create_spot_instances(**spot_opts)
+    else:
+        logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
+        instances = _resource().create_instances(**opts)
+    print('instances:', instances)
     date = str(datetime.datetime.now()).replace(' ', 'T')
     for n, i in enumerate(instances):
         set_tags = [{'Key': 'Name', 'Value': name},
@@ -783,6 +817,22 @@ def new(name:  'name of the instance',
         ssh(*[i.instance_id for i in instances], yes=True, cmd=cmd, no_tty=not tty)
     logging.info('done')
     return [i.instance_id for i in instances]
+
+
+def _zones():
+    return [x['ZoneName'] for x in _client().describe_availability_zones()['AvailabilityZones']]
+
+
+def spot_pricing(region='us-east-1a', type='m4.xlarge', slice=20):
+    prices = [_client().describe_spot_price_history(InstanceTypes=[type], AvailabilityZone=zone)['SpotPriceHistory'][:slice] for zone in _zones()]
+    prices = list(zip(*prices))
+    val = ''
+    val += ' '.join(('type', 'time', ' '.join([p['AvailabilityZone'] for p in prices[0]]))) + '\n'
+    for pp in prices:
+        val += ' '.join((type,
+                         str(pp[0]['Timestamp']).split('+')[0].replace(' ', 'T')[:-3],
+                         ' '.join(['%.3f' % float(p['SpotPrice']) for p in pp]))) + '\n'
+    print(util.strings.align(val))
 
 
 def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):

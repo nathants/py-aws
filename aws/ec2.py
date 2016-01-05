@@ -1,5 +1,6 @@
 import argh
 import boto3
+import botocore.exceptions
 import datetime
 import itertools
 import logging
@@ -228,6 +229,7 @@ def _launch_cmd(arg, cmd, no_rm, bucket):
 
 # TODO move launch out of `ec2` and into a `launch` cli?
 # TODO consider chunking logs, or at least uploading the last 1000 log lines as a distinct thing. usually we only care about the end.
+# TODO something like `ec2 launch-restart <instance-id>` would be really handy. good reason to switch to cloud-init? because it's ec2 meta-data?
 @argh.arg('--tag', action='append')
 def launch(name:    'name of all instances',
            *args:   'one instance per arg, and that arg is str formatted into cmd, pre_cmd, and tags via %(arg)s',
@@ -525,7 +527,7 @@ def _wait_for_ssh(*instances):
     logging.info('wait for state=running...')
     _wait_until('running', *instances)
     logging.info('wait for ssh...')
-    for _ in range(30):
+    for _ in range(120):
         timeout = 3 + random.random()
         start = time.time()
         try:
@@ -536,7 +538,7 @@ def _wait_for_ssh(*instances):
         except:
             logging.info('trying ssh...')
             time.sleep(max(0, timeout - (time.time() - start)))
-    assert False
+    assert False, 'failed to wait for ssh'
 
 
 def untag(ls_tags, unset_tags, yes=False, first_n=None, last_n=None):
@@ -734,10 +736,17 @@ def _blocks(gigs):
 
 def _create_spot_instances(**opts):
     request_ids = [x['SpotInstanceRequestId'] for x in _client().request_spot_instances(**opts)['SpotInstanceRequests']]
-    logging.info("wait for spot request to be filled for ids: %s", ' '.join(request_ids))
-    _client().get_waiter('spot_instance_request_fulfilled').wait(SpotInstanceRequestIds=request_ids)
+    logging.info("wait for spot request to be filled for ids:\n%s", '\n'.join(request_ids))
+    for _ in range(60):
+        try:
+            _client().get_waiter('spot_instance_request_fulfilled').wait(SpotInstanceRequestIds=request_ids)
+            break
+        except botocore.exceptions.WaiterError: # fails when spot-request-id does not exist (yet)
+            time.sleep(1 + random.random())
+    else:
+        raise AssertionError('failed to wait for spot requests')
     instance_ids = [x['InstanceId'] for x in _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)['SpotInstanceRequests']]
-    logging.info('request fulfilled with instance-ids: %s', ' '.join(instance_ids))
+    logging.info('request fulfilled with instance-ids:\n%s', '\n'.join(instance_ids))
     logging.info('wait for instances...')
     _client().get_waiter('instance_running').wait(InstanceIds=instance_ids)
     instances = _ls(instance_ids)

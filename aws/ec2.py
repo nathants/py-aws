@@ -151,7 +151,7 @@ def _remote_cmd(cmd):
     return "path=/tmp/$(uuidgen); echo %s | base64 -d > $path; bash $path" % util.strings.b64_encode(cmd)
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, no_tty=False):
+def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, no_tty=False, user='ubuntu', key=None):
     """
     tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     """
@@ -164,7 +164,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
     if not (quiet and yes):
         for i in instances:
             logging.info(_pretty(i))
-    ssh_cmd = ('ssh -A ' + ('-tt' if not no_tty or not cmd else '-T') + ssh_args).split()
+    ssh_cmd = ('ssh -A' + (' -i {} '.format(key) if key else '') + (' -tt ' if not no_tty or not cmd else ' -T ') + ssh_args).split()
     if timeout:
         ssh_cmd = ['timeout', '{}s'.format(timeout)] + ssh_cmd
     if not yes and not (len(instances) == 1 and not cmd):
@@ -180,7 +180,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
                 name = (_name(instance) + ': ' + instance.public_dns_name + ': ')
                 def fn():
                     try:
-                        shell.run(*(ssh_cmd + ['ubuntu@' + instance.public_dns_name, _remote_cmd(cmd), '2>/dev/null']),
+                        shell.run(*(ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd), '2>/dev/null']),
                                   callback=lambda x: print(color(x if quiet else name + x).replace('\r', ''), flush=True),
                                   raw_cmd=True,
                                   stream=False,
@@ -198,9 +198,9 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
             if failures:
                 sys.exit(1)
         elif cmd:
-            shell.run(*(ssh_cmd + ['ubuntu@' + instances[0].public_dns_name, _remote_cmd(cmd)]), echo=False, stream=True, hide_stderr=quiet, raw_cmd=True)
+            shell.run(*(ssh_cmd + [user + '@' + instances[0].public_dns_name, _remote_cmd(cmd)]), echo=False, stream=True, hide_stderr=quiet, raw_cmd=True)
         else:
-            subprocess.check_call(ssh_cmd + ['ubuntu@' + instances[0].public_dns_name])
+            subprocess.check_call(ssh_cmd + [user + '@' + instances[0].public_dns_name])
     except:
         sys.exit(1)
 

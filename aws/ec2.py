@@ -821,7 +821,7 @@ def new(name:  'name of the instance',
         logging.info('tagged: %s', _pretty(i))
     _wait_for_ssh(*instances)
     if login:
-        logging.info('logging in via login...')
+        logging.info('logging in...')
         ssh(instances[0].instance_id, yes=True, quiet=True)
     elif cmd:
         logging.info('running cmd...')
@@ -834,7 +834,7 @@ def _zones():
     return [x['ZoneName'] for x in _client().describe_availability_zones()['AvailabilityZones']]
 
 
-def spot_pricing(region='us-east-1a', type='m4.xlarge', slice=20):
+def spot_pricing(type, region='us-east-1a', slice=20):
     prices = [_client().describe_spot_price_history(InstanceTypes=[type], AvailabilityZone=zone)['SpotPriceHistory'][:slice] for zone in _zones()]
     prices = list(zip(*prices))
     val = ''

@@ -248,7 +248,7 @@ def launch(name:    'name of all instances',
            sg:      'security group name'         = shell.conf.get_or_prompt_pref('sg',   __file__, message='security group name'),
            type:    'instance type'               = shell.conf.get_or_prompt_pref('type', __file__, message='instance type'),
            vpc:     'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  __file__, message='vpc name'),
-           gigs:    'gb capacity of primary disk' = 16):
+           gigs:    'gb capacity of primary disk' = 8):
     instance_ids = new(name,
                        spot=spot,
                        key=key,
@@ -701,6 +701,14 @@ def revoke(ip, *names, yes=False):
 
 def amis(*name_fragments):
     name_fragments = ('ubuntu/images/',) + name_fragments
+    amis = _resource().images.filter(Owners=['self'])
+    amis = sorted(amis, key=lambda x: x.creation_date, reverse=True)
+    for ami in amis:
+        print('%s %s' % (util.colors.green(ami.image_id), ami.name))
+
+
+def amis_ubuntu(*name_fragments):
+    name_fragments = ('ubuntu/images/',) + name_fragments
     amis = list(_resource().images.filter(Owners=['099720109477'],
                                           Filters=[{'Name': 'name',
                                                     'Values': ['*%s*' % '*'.join(name_fragments)]},
@@ -810,7 +818,7 @@ def new(name:  'name of the instance',
     else:
         logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
         instances = _resource().create_instances(**opts)
-    print('instances:', instances)
+    print('instances:', [i.instance_id for i in instances])
     date = str(datetime.datetime.now()).replace(' ', 'T')
     for n, i in enumerate(instances):
         set_tags = [{'Key': 'Name', 'Value': name},
@@ -875,6 +883,28 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):
         logging.info('waiting for all to start')
         for i in instances:
             i.wait_until_running()
+
+
+def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, description=None, no_append_date=False):
+    assert name, 'you must provide a name'
+    if not description:
+        description = name
+    if not no_append_date:
+        name += '-' + str(datetime.datetime.utcnow()).replace(' ', 'T').split('.')[0].replace(':', '-') + 'Z'
+    assert tags, 'you must specify some tags'
+    instances = _ls(tags, ['running', 'stopped'], first_n, last_n)
+    assert len(instances) == 1, 'didnt find exactly one instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    instance = instances[0]
+    logging.info('going to image the following instance:')
+    logging.info(' ' + _pretty(instance))
+    if not yes:
+        logging.info('\nwould you like to proceed? y/n\n')
+        assert pager.getch() == 'y', 'abort'
+    ami_id = instance.create_image(Name=name, Description=description).image_id
+    if not no_wait:
+        logging.info('wait for image...')
+        _client().get_waiter('image_available').wait(ImageIds=[ami_id])
+    return ami_id
 
 
 def main():

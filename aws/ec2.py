@@ -31,7 +31,7 @@ import util.time
 util.log.setup(format='%(message)s')
 
 
-ssh_args = ' -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no '
+ssh_args = ' -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no '
 
 
 @util.cached.func
@@ -134,8 +134,11 @@ def _name_group(instance):
 
 
 def ip(*tags, first_n=None, last_n=None):
-    for i in _ls(tags, 'running', first_n, last_n):
-        print(i.public_dns_name, flush=True)
+    return [i.public_dns_name for i in _ls(tags, 'running', first_n, last_n)]
+
+
+def ip_private(*tags, first_n=None, last_n=None):
+    return [i.private_dns_name for i in _ls(tags, 'running', first_n, last_n)]
 
 
 def ls(*tags, state='all', first_n=None, last_n=None, ip=False, all_tags=False):
@@ -534,6 +537,7 @@ def _wait_for_ssh(*instances):
             ssh(*[i.instance_id for i in instances], cmd='whoami > /dev/null', yes=True, quiet=True, timeout=timeout)
             for i in instances:
                 i.reload()
+            assert len(ip(*[i.instance_id for i in instances])) == len(instances) # eventual consistency is the best, you'd think the waiter would have covered this
             return [i.public_dns_name for i in instances]
         except:
             logging.info('trying ssh...')
@@ -778,6 +782,7 @@ def new(name:  'name of the instance',
         spot:  'spot price to bid'           = None,
         tty:   'run cmd in a tty'            = False,
         login: 'login into the instance'     = False):
+    assert not (spot and type.startswith('t2.')), 't2.* instances cant use spot pricing'
     if vpc.lower() == 'none':
         vpc = None
     assert not login or num == 1, util.colors.red('you asked to login, but you are starting more than one instance, so its not gonna happen')

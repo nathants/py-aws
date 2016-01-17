@@ -28,6 +28,9 @@ import util.strings
 import util.time
 
 
+is_cli = False
+
+
 util.log.setup(format='%(message)s')
 
 
@@ -170,7 +173,8 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
     ssh_cmd = ('ssh -A' + (' -i {} '.format(key) if key else '') + (' -tt ' if not no_tty or not cmd else ' -T ') + ssh_args).split()
     if timeout:
         ssh_cmd = ['timeout', '{}s'.format(timeout)] + ssh_cmd
-    if not yes and not (len(instances) == 1 and not cmd):
+    make_ssh_cmd = lambda instance: ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd)]
+    if is_cli and not yes and not (len(instances) == 1 and not cmd):
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     try:
@@ -183,8 +187,9 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
                 name = (_name(instance) + ': ' + instance.public_dns_name + ': ')
                 def fn():
                     try:
-                        shell.run(*(ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd), '2>/dev/null']),
-                                  callback=lambda x: print(color(x if quiet else name + x).replace('\r', ''), flush=True),
+                        cb = lambda x: print(color(x if quiet else name + x).replace('\r', ''), flush=True)
+                        shell.run(*make_ssh_cmd(instance),
+                                  callback=cb,
                                   raw_cmd=True,
                                   stream=False,
                                   hide_stderr=quiet)
@@ -201,7 +206,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
             if failures:
                 sys.exit(1)
         elif cmd:
-            shell.run(*(ssh_cmd + [user + '@' + instances[0].public_dns_name, _remote_cmd(cmd)]), echo=False, stream=True, hide_stderr=quiet, raw_cmd=True)
+            shell.run(*make_ssh_cmd(instances[0]), echo=False, stream=True, hide_stderr=quiet, raw_cmd=True)
         else:
             subprocess.check_call(ssh_cmd + [user + '@' + instances[0].public_dns_name])
     except:
@@ -348,7 +353,7 @@ def scp(src, dst, *tags, yes=False, max_threads=0):
     for instance in instances:
         logging.info(' %s', _pretty(instance))
     logging.info('going to scp: %s to %s', src, dst)
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     justify = max(len(i.public_dns_name) for i in instances)
@@ -389,7 +394,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_t
     for instance in instances:
         logging.info(' %s', _pretty(instance))
     logging.info('going to push:\n%s', util.strings.indent(shell.run('bash', _tar_script(src, name, echo_only=True)), 1))
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     script = _tar_script(src, name)
@@ -435,7 +440,7 @@ def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
     logging.info('going to pull:')
     logging.info(util.strings.indent(shell.check_output(cmd), 1))
     shell.check_call('rm -rf', os.path.dirname(script))
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     script = _tar_script(src, name)
@@ -491,7 +496,7 @@ def stop(*tags, yes=False, first_n=None, last_n=None, wait=False):
     logging.info('going to stop the following instances:')
     for i in instances:
         logging.info(' ' + _pretty(i))
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     for i in instances:
@@ -509,7 +514,7 @@ def rm(*tags, yes=False, first_n=None, last_n=None):
     logging.info('going to terminate the following instances:')
     for i in instances:
         logging.info(' ' + _pretty(i))
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     for i in instances:
@@ -548,14 +553,14 @@ def _wait_for_ssh(*instances):
 def untag(ls_tags, unset_tags, yes=False, first_n=None, last_n=None):
     assert '=' not in unset_tags, 'no "=", just the name of the tag to unset'
     instances = _ls(tuple(ls_tags.split(',')), 'all', first_n, last_n)
-    assert instances, 'didnt find any stopped instances for those tags'
+    assert instances, 'didnt find any instances for those tags'
     logging.info('going to untag the following instances:')
     for i in instances:
         logging.info(' ' + _pretty(i))
     logging.info('with:')
     for x in unset_tags.split(','):
         logging.info(' ' + x)
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     for i in instances:
@@ -566,14 +571,14 @@ def untag(ls_tags, unset_tags, yes=False, first_n=None, last_n=None):
 
 def tag(ls_tags, set_tags, yes=False, first_n=None, last_n=None):
     instances = _ls(tuple(ls_tags.split(',')), 'all', first_n, last_n)
-    assert instances, 'didnt find any stopped instances for those tags'
+    assert instances, 'didnt find any instances for those tags'
     logging.info('going to tag the following instances:')
     for i in instances:
         logging.info(' ' + _pretty(i))
     logging.info('with:')
     for x in set_tags.split(','):
         logging.info(' ' + x)
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     for i in instances:
@@ -591,7 +596,7 @@ def wait(*tags, state='running', yes=False, first_n=None, last_n=None, ssh=False
     logging.info('going to wait the following instances to be %s:', 'ssh-able' if ssh else state)
     for i in instances:
         logging.info(' ' + _pretty(i))
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     if ssh:
@@ -609,7 +614,7 @@ def reboot(*tags, yes=False, first_n=None, last_n=None):
     logging.info('going to reboot the following instances:')
     for i in instances:
         logging.info(' ' + _pretty(i))
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     for i in instances:
@@ -656,7 +661,7 @@ def authorize(ip, *names, yes=False):
         sgs = [x for x in sgs if x.group_name in names]
     for sg in sgs:
         logging.info(' %s [%s]', sg.group_name, sg.group_id)
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to authorize access to these groups for your ip %s? y/n\n', util.colors.yellow(ip))
         assert pager.getch() == 'y', 'abort'
     with open('/var/log/ec2_auth_ips.log', 'a') as f:
@@ -682,7 +687,7 @@ def revoke(ip, *names, yes=False):
     logging.info('your ip %s is currently wildcarded to the following security groups:\n', util.colors.yellow(ip))
     for sg in sgs:
         logging.info(' %s [%s]', sg.group_name, sg.group_id)
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to revoke access to these groups for your ip %s? y/n\n', util.colors.yellow(ip))
         assert pager.getch() == 'y', 'abort'
     for sg in sgs:
@@ -866,7 +871,7 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):
     logging.info('going to start the following instances:')
     for i in instances:
         logging.info(' ' + _pretty(i))
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     for i in instances:
@@ -892,12 +897,12 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
     if not no_append_date:
         name += '-' + str(datetime.datetime.utcnow()).replace(' ', 'T').split('.')[0].replace(':', '-') + 'Z'
     assert tags, 'you must specify some tags'
-    instances = _ls(tags, ['running', 'stopped'], first_n, last_n)
-    assert len(instances) == 1, 'didnt find exactly one instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    instances = _ls(tags, 'stopped', first_n, last_n)
+    assert len(instances) == 1, 'didnt find exactly one stopped instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     instance = instances[0]
     logging.info('going to image the following instance:')
     logging.info(' ' + _pretty(instance))
-    if not yes:
+    if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     ami_id = instance.create_image(Name=name, Description=description).image_id
@@ -908,6 +913,7 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
 
 
 def main():
+    globals()['is_cli'] = True
     shell.ignore_closed_pipes()
     with util.log.disable('botocore', 'boto3'):
         try:

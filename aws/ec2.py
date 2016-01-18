@@ -298,13 +298,26 @@ def launch_ls_logs(owner=None,
     owner = owner or shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
     ks = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
-    ks = [k.split()[-1] for k in ks]
-    for k in ks:
-        try:
-            date, tags, ip = k.split('_')
-        except ValueError:
-            continue
-        print(tags.replace(',', ' '))
+    ks = [k for k in ks if 'launch=' in k]
+    ks = [k.split()[-1].split('_') for k in ks]
+    ks = [k for k in ks if len(k) == 3]
+    ks = [{'date': date,
+           'tags': {k: v
+                    for x in tags.split(',')
+                    if '=' in x
+                    for k, v in [x.split('=')]},
+           'ip': ip}
+          for date, tags, ip in ks]
+    ks = util.iter.groupby(ks, lambda x: x['tags']['launch'])
+    ks = sorted(ks, key=lambda x: x[1][0]['date']) # TODO date should be identical for all launchees, currently is distinct.
+    for launch, xs in ks:
+        print('\n' +
+              'Name=' + xs[0]['tags']['Name'],
+              'launch=' + launch,
+              'date=' + xs[0]['date'])
+        args = sorted([x['tags']['arg'] for x in xs])
+        for arg in args:
+            print('', 'arg=' + arg)
 
 
 def launch_log(*tags,
@@ -320,8 +333,8 @@ def launch_log(*tags,
     shell.call('aws s3 cp s3://%(prefix)s%(k)s - | less -R' % locals())
 
 
-def launch_logs(cmd,
-                *tags,
+def launch_logs(*tags,
+                cmd='tail -n 1',
                 max_threads=10,
                 bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
     owner = shell.run('whoami')

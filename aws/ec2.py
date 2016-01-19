@@ -4,7 +4,6 @@ import botocore.exceptions
 import datetime
 import itertools
 import logging
-import mock
 import os
 import pager
 import pool.thread
@@ -26,6 +25,7 @@ import util.iter
 import util.log
 import util.strings
 import util.time
+from unittest import mock
 
 
 is_cli = False

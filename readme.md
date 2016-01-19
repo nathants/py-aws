@@ -3,7 +3,7 @@ aws creds via http://boto3.readthedocs.org/en/latest/guide/configuration.html#en
 
 install:
 
-`sudo apt-get install python3-pip`
+`sudo apt-get install python3-pip libyaml-dev`
 
 `git clone https://github.com/nathants/py-aws`
 

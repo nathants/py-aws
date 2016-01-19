@@ -226,7 +226,7 @@ def _launch_cmd(arg, cmd, no_rm, bucket):
         'ip': '$(curl http://169.254.169.254/latest/meta-data/public-hostname/ 2>/dev/null)',
         'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s" % x for x in json.load(sys.stdin)["Tags"] if x["Key"] != "creation-date"]).replace("_", "-"))\')', # noqa
     }
-    return "(%(cmd)s; echo exited $?; %(upload_logs)s; %(shutdown)s) >nohup.out 2>nohup.out </dev/null &" % {
+    return "(set -x; %(cmd)s; set +x; echo exited $?; %(upload_logs)s; %(shutdown)s) >nohup.out 2>nohup.out </dev/null &" % {
         'cmd': _cmd,
         'upload_logs': upload_logs,
         'shutdown': ('sudo halt'

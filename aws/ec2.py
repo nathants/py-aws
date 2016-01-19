@@ -297,20 +297,20 @@ def launch_ls_logs(owner=None,
                    bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
     owner = owner or shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
-    ks = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
-    ks = [k for k in ks if 'launch=' in k]
-    ks = [k.split()[-1].split('_') for k in ks]
-    ks = [k for k in ks if len(k) == 3]
-    ks = [{'date': date,
-           'tags': {k: v
-                    for x in tags.split(',')
-                    if '=' in x
-                    for k, v in [x.split('=')]},
-           'ip': ip}
-          for date, tags, ip in ks]
-    ks = util.iter.groupby(ks, lambda x: x['tags']['launch'])
-    ks = sorted(ks, key=lambda x: x[1][0]['date']) # TODO date should be identical for all launchees, currently is distinct.
-    for launch, xs in ks:
+    keys = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
+    keys = [key for key in keys if 'launch=' in key]
+    keys = [key.split()[-1].split('_') for key in keys]
+    keys = [key for key in keys if len(key) == 3]
+    keys = [{'date': date,
+             'tags': {key: v
+                      for x in tags.split(',')
+                      if '=' in x
+                      for key, v in [x.split('=')]},
+             'ip': ip}
+            for date, tags, ip in keys]
+    keys = util.iter.groupby(keys, lambda x: x['tags']['launch'])
+    keys = sorted(keys, key=lambda x: x[1][0]['date']) # TODO date should be identical for all launchees, currently is distinct.
+    for launch, xs in keys:
         print('\n' +
               'Name=' + xs[0]['tags']['Name'],
               'launch=' + launch,
@@ -325,12 +325,12 @@ def launch_log(*tags,
                bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
     owner = shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
-    ks = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
-    ks = [k.split()[-1] for k in ks]
-    ks = [k for k in ks
-          if all(t in k for t in tags)]
-    k = ks[index]
-    shell.call('aws s3 cp s3://%(prefix)s%(k)s - | less -R' % locals())
+    keys = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
+    keys = [key.split()[-1] for key in keys]
+    keys = [key for key in keys
+            if all(t in key for t in tags)]
+    key = keys[index]
+    shell.call('aws s3 cp s3://%(prefix)s%(key)s -' % locals())
 
 
 def launch_logs(*tags,
@@ -339,20 +339,20 @@ def launch_logs(*tags,
                 bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
     owner = shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
-    ks = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
-    ks = [k.split()[-1] for k in ks]
-    ks = [k for k in ks
-          if all(t in k for t in tags)]
+    keys = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
+    keys = [key.split()[-1] for key in keys]
+    keys = [key for key in keys
+            if all(t in key for t in tags)]
     fail = False
-    def f(k, cmd, prefix):
-        date, tags, ip = k.split('_')
+    def f(key, cmd, prefix):
+        date, tags, ip = key.split('_')
         arg = [x for x in tags.split(',') if x.startswith('arg=')][0]
         try:
-            print('[%s exit 0]' % arg, shell.run('aws s3 cp s3://%(prefix)s%(k)s - | %(cmd)s' % locals()))
+            print('[%s exit 0]' % arg, shell.run(('aws s3 cp s3://%(prefix)s%(key)s - |' + cmd) % locals()))
         except AssertionError:
             print('[%s exit 1]' % arg)
             fail = True
-    pool.thread.wait(*[(f, [k, cmd, prefix]) for k in ks], max_threads=max_threads)
+    pool.thread.wait(*[(f, [key, cmd, prefix]) for key in keys], max_threads=max_threads)
     if fail:
         sys.exit(1)
 

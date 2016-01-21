@@ -37,6 +37,21 @@ util.log.setup(format='%(message)s')
 ssh_args = ' -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no '
 
 
+def _retry(f):
+    """
+    retry and idempotent fn a few times
+    """
+    def fn(*a, **kw):
+        for i in range(4):
+            try:
+                return f(*a, **kw)
+            except Exception as e:
+                if i == 3:
+                    raise e
+                time.sleep(i + random.random())
+    return fn
+
+
 @util.cached.func
 def _resource():
     return boto3.resource('ec2')
@@ -157,7 +172,7 @@ def _remote_cmd(cmd):
     return "path=/tmp/$(uuidgen); echo %s | base64 -d > $path; bash $path" % util.strings.b64_encode(cmd)
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, no_tty=False, user='ubuntu', key=None):
+def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, no_tty=False, user='ubuntu', key=None, echo=False):
     """
     tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     """
@@ -171,6 +186,8 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
         for i in instances:
             logging.info(_pretty(i))
     ssh_cmd = ('ssh -A' + (' -i {} '.format(key) if key else '') + (' -tt ' if not no_tty or not cmd else ' -T ') + ssh_args).split()
+    if echo:
+        logging.info('ec2.ssh ran against tags: %s, with cmd: %s', tags, cmd)
     if timeout:
         ssh_cmd = ['timeout', '{}s'.format(timeout)] + ssh_cmd
     make_ssh_cmd = lambda instance: ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd)]
@@ -206,7 +223,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
             if failures:
                 sys.exit(1)
         elif cmd:
-            shell.run(*make_ssh_cmd(instances[0]), echo=False, stream=True, hide_stderr=quiet, raw_cmd=True)
+            return shell.run(*make_ssh_cmd(instances[0]), echo=False, stream=True, hide_stderr=quiet, raw_cmd=True)
         else:
             subprocess.check_call(ssh_cmd + [user + '@' + instances[0].public_dns_name])
     except:
@@ -274,9 +291,9 @@ def launch(name:    'name of all instances',
                     ssh(instance_id, yes=True, cmd=pre_cmd % {'arg': arg})
                 ssh(instance_id, no_tty=True, yes=True, cmd=_launch_cmd(arg, cmd, no_rm, bucket))
                 instance = _ls([instance_id])[0]
-                instance.create_tags(Tags=[{'Key': k, 'Value': v}
-                                           for t in tag + ['arg=%s' % arg]
-                                           for [k, v] in [(t % {'arg': arg}).split('=')]])
+                _retry(instance.create_tags)(Tags=[{'Key': k, 'Value': v}
+                                             for t in tag + ['arg=%s' % arg]
+                                             for [k, v] in [(t % {'arg': arg}).split('=')]])
                 logging.info('tagged: %s', _pretty(instance))
                 logging.info('ran cmd against %s for arg %s', instance_id, arg)
             except:
@@ -578,7 +595,7 @@ def untag(ls_tags, unset_tags, yes=False, first_n=None, last_n=None):
         assert pager.getch() == 'y', 'abort'
     for i in instances:
         for t in unset_tags.split(','):
-            i.create_tags(Tags=[{'Key': t, 'Value': ''}])[0].delete()
+            _retry(i.create_tags)(Tags=[{'Key': t, 'Value': ''}])[0].delete()
             logging.info('untagged: %s', _pretty(i))
 
 
@@ -597,7 +614,7 @@ def tag(ls_tags, set_tags, yes=False, first_n=None, last_n=None):
     for i in instances:
         for t in set_tags.split(','):
             k, v = t.split('=')
-            i.create_tags(Tags=[{'Key': k, 'Value': v}])
+            _retry(i.create_tags)(Tags=[{'Key': k, 'Value': v}])
             logging.info('tagged: %s', _pretty(i))
 
 
@@ -767,8 +784,12 @@ def _blocks(gigs):
 def _create_spot_instances(**opts):
     request_ids = [x['SpotInstanceRequestId'] for x in _client().request_spot_instances(**opts)['SpotInstanceRequests']]
     logging.info("wait for spot request to be filled for ids:\n%s", '\n'.join(request_ids))
-    for _ in range(60):
+    for _ in range(300):
         try:
+            # TODO need to check here to see if spot request failed
+            # with bad params or something, otherwise hangs forever
+            # poll instead of waiter?
+            # _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)
             _client().get_waiter('spot_instance_request_fulfilled').wait(SpotInstanceRequestIds=request_ids)
             break
         except botocore.exceptions.WaiterError: # fails when spot-request-id does not exist (yet)
@@ -848,7 +869,7 @@ def new(name:  'name of the instance',
         for tag in tags:
             k, v = tag.split('=')
             set_tags.append({'Key': k, 'Value': v})
-        i.create_tags(Tags=set_tags)
+        _retry(i.create_tags)(Tags=set_tags)
         logging.info('tagged: %s', _pretty(i))
     _wait_for_ssh(*instances)
     if login:
@@ -910,9 +931,11 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
     if not no_append_date:
         name += '-' + str(datetime.datetime.utcnow()).replace(' ', 'T').split('.')[0].replace(':', '-') + 'Z'
     assert tags, 'you must specify some tags'
-    instances = _ls(tags, 'stopped', first_n, last_n)
-    assert len(instances) == 1, 'didnt find exactly one stopped instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    instances = _ls(tags, ['running', 'stopped'], first_n, last_n)
+    assert len(instances) == 1, 'didnt find exactly one instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     instance = instances[0]
+    instance.stop()
+    _wait_until('stopped', instance)
     logging.info('going to image the following instance:')
     logging.info(' ' + _pretty(instance))
     if is_cli and not yes:

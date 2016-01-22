@@ -187,7 +187,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
             logging.info(_pretty(i))
     ssh_cmd = ('ssh -A' + (' -i {} '.format(key) if key else '') + (' -tt ' if not no_tty or not cmd else ' -T ') + ssh_args).split()
     if echo:
-        logging.info('ec2.ssh ran against tags: %s, with cmd: %s', tags, cmd)
+        logging.info('ec2.ssh running against tags: %s, with cmd: %s', tags, cmd)
     if timeout:
         ssh_cmd = ['timeout', '{}s'.format(timeout)] + ssh_cmd
     make_ssh_cmd = lambda instance: ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd)]
@@ -236,20 +236,17 @@ def _launch_cmd(arg, cmd, no_rm, bucket):
         _cmd = cmd(str(arg))
     else:
         _cmd = cmd % {'arg': arg}
-    upload_logs = 'aws s3 cp ~/nohup.out s3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s_%(ip)s >/dev/null 2>&1' % {
-        'bucket': bucket,
-        'user': os.environ['USER'],
-        'date': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
-        'ip': '$(curl http://169.254.169.254/latest/meta-data/public-hostname/ 2>/dev/null)',
-        'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s" % x for x in json.load(sys.stdin)["Tags"] if x["Key"] != "creation-date"]).replace("_", "-"))\')', # noqa
-    }
-    return "(set -x; %(cmd)s; set +x; echo exited $?; %(upload_logs)s; %(shutdown)s) >nohup.out 2>nohup.out </dev/null &" % {
-        'cmd': _cmd,
-        'upload_logs': upload_logs,
-        'shutdown': ('sudo halt'
-                     if no_rm else
-                     'aws ec2 terminate-instances --instance-ids $(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)'),
-    }
+    kw = {'bucket': bucket,
+          'user': os.environ['USER'],
+          'date': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
+          'ip': '$(curl http://169.254.169.254/latest/meta-data/public-hostname/ 2>/dev/null)',
+          'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s" % x for x in json.load(sys.stdin)["Tags"] if x["Key"] != "creation-date"]).replace("_", "-"))\')'} # noqa
+    upload_log = 'aws s3 cp ~/nohup.out s3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s_%(ip)s/nohup.out >/dev/null 2>&1' % kw
+    upload_log_tail = 'tail -n 1000 ~/nohup.out > ~/nohup.out.tail; aws s3 cp ~/nohup.out.tail s3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s_%(ip)s/nohup.out.tail >/dev/null 2>&1' % kw
+    shutdown = ('sudo halt'
+                if no_rm else
+                'aws ec2 terminate-instances --instance-ids $(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)'),
+    return "(set -x; %(_cmd)s; set +x; echo exited $?; %(upload_log)s; %(upload_log_tail)s %(shutdown)s) >nohup.out 2>nohup.out </dev/null &" % locals()
 
 
 # TODO move launch out of `ec2` and into a `launch` cli?
@@ -332,6 +329,9 @@ def launch_ls_logs(owner=None,
               'Name=' + xs[0]['tags']['Name'],
               'launch=' + launch,
               'date=' + xs[0]['date'])
+        print(*['%(k)s=%(v)s' % locals()
+                for k, v in xs[0]['tags'].items()
+                if k not in ['Name', 'arg', 'launch', 'nth', 'num']])
         args = sorted([x['tags']['arg'] for x in xs])
         for arg in args:
             print('', 'arg=' + arg)
@@ -339,11 +339,13 @@ def launch_ls_logs(owner=None,
 
 def launch_log(*tags,
                index=-1,
-               bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
+               bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
+               tail_only=False):
     owner = shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
-    keys = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
+    keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
     keys = [key.split()[-1] for key in keys]
+    keys = [key for key in keys if key.endswith('nohup.out.tail' if tail_only else 'nohup.out')]
     keys = [key for key in keys
             if all(t in key for t in tags)]
     key = keys[index]
@@ -353,10 +355,12 @@ def launch_log(*tags,
 def launch_logs(*tags,
                 cmd='tail -n 1',
                 max_threads=10,
-                bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
+                bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
+                tail_only=False):
     owner = shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
-    keys = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
+    keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
+    keys = [key for key in keys if key.endswith('nohup.out.tail' if tail_only else 'nohup.out')]
     keys = [key.split()[-1] for key in keys]
     keys = [key for key in keys
             if all(t in key for t in tags)]
@@ -852,7 +856,7 @@ def new(name:  'name of the instance',
         opts['SubnetId'] = _subnet(vpc)
     if spot:
         spot_opts = _make_spot_opts(spot, **opts)
-        logging.info('request spot instances:\n' + pprint.pformat(util.dicts.drop(spot_opts, ['UserData'])))
+        logging.info('request spot instances:\n' + pprint.pformat(util.dicts.drop_in(spot_opts, ['LaunchSpecification', 'UserData'])))
         instances = _create_spot_instances(**spot_opts)
     else:
         logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))

@@ -311,9 +311,10 @@ def launch_ls_logs(owner=None,
                    bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
     owner = owner or shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
-    keys = shell.run("aws s3 ls %(prefix)s" % locals()).splitlines()
+    keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
     keys = [key for key in keys if 'launch=' in key]
-    keys = [key.split()[-1].split('_') for key in keys]
+    keys = [key for key in keys if key.endswith('nohup.out')]
+    keys = [key.split('/')[-2].split('_') for key in keys]
     keys = [key for key in keys if len(key) == 3]
     keys = [{'date': date,
              'tags': {key: v
@@ -346,10 +347,9 @@ def launch_log(*tags,
     keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
     keys = [key.split()[-1] for key in keys]
     keys = [key for key in keys if key.endswith('nohup.out.tail' if tail_only else 'nohup.out')]
-    keys = [key for key in keys
-            if all(t in key for t in tags)]
+    keys = [key for key in keys if all(t in key for t in tags)]
     key = keys[index]
-    shell.call('aws s3 cp s3://%(prefix)s%(key)s -' % locals())
+    shell.call('aws s3 cp s3://%(bucket)s/%(key)s -' % locals())
 
 
 def launch_logs(*tags,
@@ -362,18 +362,17 @@ def launch_logs(*tags,
     keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
     keys = [key for key in keys if key.endswith('nohup.out.tail' if tail_only else 'nohup.out')]
     keys = [key.split()[-1] for key in keys]
-    keys = [key for key in keys
-            if all(t in key for t in tags)]
+    keys = [key for key in keys if all(t in key for t in tags)]
     fail = False
-    def f(key, cmd, prefix):
-        date, tags, ip = key.split('_')
+    def f(key, cmd, bucket):
+        date, tags, ip = key.split('/')[-2].split('_')
         arg = [x for x in tags.split(',') if x.startswith('arg=')][0]
         try:
-            print('[%s exit 0]' % arg, shell.run(('aws s3 cp s3://%(prefix)s%(key)s - |' + cmd) % locals()))
+            print('[%s exit 0]' % arg, shell.run(('aws s3 cp s3://%(bucket)s/%(key)s - |' + cmd) % locals()))
         except AssertionError:
             print('[%s exit 1]' % arg)
             fail = True
-    pool.thread.wait(*[(f, [key, cmd, prefix]) for key in keys], max_threads=max_threads)
+    pool.thread.wait(*[(f, [key, cmd, bucket]) for key in keys], max_threads=max_threads)
     if fail:
         sys.exit(1)
 

@@ -245,8 +245,8 @@ def _launch_cmd(arg, cmd, no_rm, bucket):
     upload_log_tail = 'tail -n 1000 ~/nohup.out > ~/nohup.out.tail; aws s3 cp ~/nohup.out.tail s3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s_%(ip)s/nohup.out.tail >/dev/null 2>&1' % kw
     shutdown = ('sudo halt'
                 if no_rm else
-                'aws ec2 terminate-instances --instance-ids $(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)'),
-    return "(set -x; %(_cmd)s; set +x; echo exited $?; %(upload_log)s; %(upload_log_tail)s %(shutdown)s) >nohup.out 2>nohup.out </dev/null &" % locals()
+                'aws ec2 terminate-instances --instance-ids $(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)')
+    return "(set -x; %(_cmd)s; set +x; echo exited $?; %(upload_log)s; %(upload_log_tail)s; %(shutdown)s) >nohup.out 2>nohup.out </dev/null &" % locals()
 
 
 # TODO move launch out of `ec2` and into a `launch` cli?

@@ -11,6 +11,7 @@ setuptools.setup(
     packages=['aws'],
     install_requires=['boto3',
                       'pager'],
-    entry_points={'console_scripts': ['ec2 = aws.ec2:main']},
+    entry_points={'console_scripts': ['ec2 = aws.ec2:main',
+                                      'launch = aws.launch:main']},
     description='aws',
 )

@@ -691,7 +691,7 @@ def new(name:  'name of the instance',
         assert '=' in tag, 'bad tag, should be key=value, not: %s' % tag
     # TODO being root is not ideal. sudo -u ubuntu ...
     assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
-    init = '#!/bin/bash\n' + init
+    init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash $path' % util.strings.b64_encode(init)
     opts = {}
     opts['UserData'] = init
     opts['ImageId'] = ami

@@ -601,6 +601,9 @@ def amis(*name_fragments):
         print('%s %s' % (util.colors.green(ami.image_id), ami.name))
 
 
+ubuntus = {'trusty': 'ubuntu/images/hvm/ubuntu-trusty-14.04-amd64-server',
+           'wily':   'ubuntu/images/hvm/ubuntu-wily-15.10-amd64-server'}
+
 def amis_ubuntu(*name_fragments):
     name_fragments = ('ubuntu/images/',) + name_fragments
     amis = list(_resource().images.filter(Owners=['099720109477'],
@@ -610,9 +613,11 @@ def amis_ubuntu(*name_fragments):
                                                     'Values': ['x86_64']},
                                                    {'Name': 'virtualization-type',
                                                     'Values': ['hvm']}]))
+    vals = []
     for name, xs in util.iter.groupby(amis, key=lambda x: x.name.split('-')[:-1]):
         ami = sorted(xs, key=lambda x: x.creation_date)[-1]
-        print('%s %s' % (util.colors.green(ami.image_id), '-'.join(name)))
+        vals.append('%s %s' % (ami.image_id, '-'.join(name)))
+    return vals
 
 
 def keys():
@@ -702,6 +707,10 @@ def new(name:  'name of the instance',
     else:
         assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
         init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash $path' % util.strings.b64_encode(init)
+    if ami in ubuntus:
+        distro = ami
+        ami, _ = [x for x in amis_ubuntu() if ubuntus[distro] in x][0].split()
+        logging.info('using latest ubuntu:%s %s', distro, ami)
     opts = {}
     opts['UserData'] = init
     opts['ImageId'] = ami
@@ -739,6 +748,9 @@ def new(name:  'name of the instance',
         logging.info('logging in...')
         ssh(instances[0].instance_id, yes=True, quiet=True)
     elif cmd:
+        if os.path.isfile(cmd):
+            logging.info('reading cmd from: %s', os.path.abspath(cmd))
+            cmd = shell.run('cat', cmd)
         logging.info('running cmd...')
         ssh(*[i.instance_id for i in instances], yes=True, cmd=cmd, no_tty=not tty)
     logging.info('done')

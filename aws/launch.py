@@ -1,4 +1,5 @@
 import aws.ec2
+import os
 import datetime
 import time
 import random
@@ -53,6 +54,12 @@ def new(name:    'name of all instances',
         gigs:    'gb capacity of primary disk' = 16):
     for arg in args:
         assert ' ' not in arg, 'args cannot have spaces: %s' % arg
+    if os.path.isfile(pre_cmd):
+        logging.info('reading pre_cmd from file: %s', os.path.abspath(pre_cmd))
+        pre_cmd = shell.run('cat', pre_cmd)
+    if os.path.isfile(cmd):
+        logging.info('reading cmd from file: %s', os.path.abspath(cmd))
+        cmd = shell.run('cat', cmd)
     launch_id = str(uuid.uuid4())
     logging.info('launch=%s', launch_id)
     data = json.dumps({'name': name,

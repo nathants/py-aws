@@ -175,7 +175,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
     """
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
-    if os.path.isfile(cmd):
+    if os.path.exists(cmd):
         with open(cmd) as f:
             cmd = f.read()
     assert (cmd and instances) or len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
@@ -417,7 +417,18 @@ def _ls_by_ids(*ids):
 
 def _wait_until(state, *instances):
     assert state in ['running', 'stopped']
-    _client().get_waiter('instance_' + state).wait(InstanceIds=[i.instance_id for i in instances])
+    ids = [getattr(i, 'instance_id', i) for i in instances]
+    _client().get_waiter('instance_' + state).wait(InstanceIds=ids)
+    # because waiter exits before ls return currect results sometimes.
+    for i in range(10):
+        try:
+            new_instances = _ls(ids, state=state)
+            assert len(instances) == len(new_instances), '%s != %s' % (len(instances), (new_instances))
+            return new_instances
+        except:
+            if i == 9:
+                raise
+            time.sleep(i + random.random())
 
 
 def _wait_for_ssh(*instances):
@@ -663,10 +674,7 @@ def _create_spot_instances(**opts):
     instance_ids = [x['InstanceId'] for x in _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)['SpotInstanceRequests']]
     logging.info('request fulfilled with instance-ids:\n%s', '\n'.join(instance_ids))
     logging.info('wait for instances...')
-    _client().get_waiter('instance_running').wait(InstanceIds=instance_ids)
-    instances = _ls(instance_ids)
-    assert len(instances) == opts['InstanceCount'], 'num instances: %s != %s' % (len(instances), opts['InstanceCount'])
-    return instances
+    return _wait_until('running', instance_ids)
 
 
 def _make_spot_opts(spot, **opts):
@@ -701,7 +709,6 @@ def new(name:  'name of the instance',
     owner = shell.run('whoami')
     for tag in tags:
         assert '=' in tag, 'bad tag, should be key=value, not: %s' % tag
-
     if data: # you can have either data or init, not both
         init = '#raw-data\n' + data
     else:
@@ -729,7 +736,7 @@ def new(name:  'name of the instance',
     else:
         logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
         instances = _resource().create_instances(**opts)
-    print('instances:', [i.instance_id for i in instances])
+    logging.info('instances: %s', [i.instance_id for i in instances])
     date = str(datetime.datetime.now()).replace(' ', 'T')
     for n, i in enumerate(instances):
         set_tags = [{'Key': 'Name', 'Value': name},
@@ -748,9 +755,10 @@ def new(name:  'name of the instance',
         logging.info('logging in...')
         ssh(instances[0].instance_id, yes=True, quiet=True)
     elif cmd:
-        if os.path.isfile(cmd):
+        if os.path.exists(cmd):
             logging.info('reading cmd from: %s', os.path.abspath(cmd))
-            cmd = shell.run('cat', cmd)
+            with open(cmd) as f:
+                cmd = f.read()
         logging.info('running cmd...')
         ssh(*[i.instance_id for i in instances], yes=True, cmd=cmd, no_tty=not tty)
     logging.info('done')

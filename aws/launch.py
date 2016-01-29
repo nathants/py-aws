@@ -54,12 +54,14 @@ def new(name:    'name of all instances',
         gigs:    'gb capacity of primary disk' = 16):
     for arg in args:
         assert ' ' not in arg, 'args cannot have spaces: %s' % arg
-    if os.path.isfile(pre_cmd):
+    if os.path.exists(pre_cmd):
         logging.info('reading pre_cmd from file: %s', os.path.abspath(pre_cmd))
-        pre_cmd = shell.run('cat', pre_cmd)
-    if os.path.isfile(cmd):
+        with open(pre_cmd) as f:
+            pre_cmd = f.read()
+    if os.path.exists(cmd):
         logging.info('reading cmd from file: %s', os.path.abspath(cmd))
-        cmd = shell.run('cat', cmd)
+        with open(cmd) as f:
+            cmd = f.read()
     launch_id = str(uuid.uuid4())
     logging.info('launch=%s', launch_id)
     data = json.dumps({'name': name,

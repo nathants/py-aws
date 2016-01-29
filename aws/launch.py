@@ -1,4 +1,5 @@
 import aws.ec2
+import json
 import argh
 import logging
 import os
@@ -14,18 +15,18 @@ import util.log
 from unittest import mock
 
 
-# TODO something like `launch restart <instance-id>` would be
-# really handy. good reason to switch to cloud-init? because it's ec2
-# meta-data and accessible out of band?
+# TODO something like `launch restart <instance-id>` would be really
+# handy. good reason to switch to cloud-init? because it's ec2
+# meta-data and accessible out of band? nope. unless we do a ec2.new
+# per instance, there is no way to get unique user-data per instance,
+# and since tags cant be set at creation time, we cant parameterize
+# cloud-init via tags. too many calls to ec2.new will hit api
+# throttling, and result in a more complex solution?
 
 # TODO something like `launch wait launch=xxx
 
-def _launch_cmd(arg, cmd, no_rm, bucket):
-    # TODO how to make this more understandable?
-    if callable(cmd):
-        _cmd = cmd(str(arg))
-    else:
-        _cmd = cmd % {'arg': arg}
+def _cmd(arg, cmd, no_rm, bucket):
+    _cmd = cmd % {'arg': arg}
     kw = {'bucket': bucket,
           'user': os.environ['USER'],
           'date': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
@@ -40,21 +41,21 @@ def _launch_cmd(arg, cmd, no_rm, bucket):
 
 
 @argh.arg('--tag', action='append')
-def launch(name:    'name of all instances',
-           *args:   'one instance per arg, and that arg is str formatted into cmd, pre_cmd, and tags via %(arg)s',
-           pre_cmd: 'optional cmd which runs before cmd is backgrounded' = None,
-           cmd:     'cmd which is run in the background' = None,
-           tag:     'tag to set as "<key>=<value>' = None,
-           no_rm:   'stop instance instead of terminating when done' = False,
-           bucket:  's3 bucket to upload logs to' = shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
-           # following opts are copied verbatim from ec2.new
-           spot:    'spot price to bid'           = None,
-           key:     'key pair name'               = shell.conf.get_or_prompt_pref('key',  aws.ec2.__file__, message='key pair name'),
-           ami:     'ami id'                      = shell.conf.get_or_prompt_pref('ami',  aws.ec2.__file__, message='ami id'),
-           sg:      'security group name'         = shell.conf.get_or_prompt_pref('sg',   aws.ec2.__file__, message='security group name'),
-           type:    'instance type'               = shell.conf.get_or_prompt_pref('type', aws.ec2.__file__, message='instance type'),
-           vpc:     'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  aws.ec2.__file__, message='vpc name'),
-           gigs:    'gb capacity of primary disk' = 8):
+def new(name:    'name of all instances',
+        *args:   'one instance per arg, and that arg is str formatted into cmd, pre_cmd, and tags via %(arg)s',
+        pre_cmd: 'optional cmd which runs before cmd is backgrounded' = None,
+        cmd:     'cmd which is run in the background' = None,
+        tag:     'tag to set as "<key>=<value>' = None,
+        no_rm:   'stop instance instead of terminating when done' = False,
+        bucket:  's3 bucket to upload logs to' = shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
+        # following opts are copied verbatim from ec2.new
+        spot:    'spot price to bid'           = None,
+        key:     'key pair name'               = shell.conf.get_or_prompt_pref('key',  aws.ec2.__file__, message='key pair name'),
+        ami:     'ami id'                      = shell.conf.get_or_prompt_pref('ami',  aws.ec2.__file__, message='ami id'),
+        sg:      'security group name'         = shell.conf.get_or_prompt_pref('sg',   aws.ec2.__file__, message='security group name'),
+        type:    'instance type'               = shell.conf.get_or_prompt_pref('type', aws.ec2.__file__, message='instance type'),
+        vpc:     'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  aws.ec2.__file__, message='vpc name'),
+        gigs:    'gb capacity of primary disk' = 8):
     instance_ids = aws.ec2.new(name,
                                spot=spot,
                                key=key,
@@ -63,21 +64,21 @@ def launch(name:    'name of all instances',
                                type=type,
                                vpc=vpc,
                                gigs=gigs,
-                               num=len(args))
+                               num=len(args),
+                               data=json.dumps({'pre_cmd': pre_cmd, 'cmd': cmd}))
     errors = []
     launch_id = str(uuid.uuid4())
     tag = (tag or []) + ['launch=%s' % launch_id]
     def run_cmd(instance_id, arg):
         def fn():
             try:
-                # TODO callback to prefix output with instance-id, ala `ec2.ssh`
                 if pre_cmd:
-                    aws.ec2.ssh(instance_id, yes=True, cmd=pre_cmd % {'arg': arg})
-                aws.ec2.ssh(instance_id, no_tty=True, yes=True, cmd=_launch_cmd(arg, cmd, no_rm, bucket))
+                    aws.ec2.ssh(instance_id, yes=True, cmd=pre_cmd % {'arg': arg}, prefixed=True)
+                aws.ec2.ssh(instance_id, no_tty=True, yes=True, cmd=_cmd(arg, cmd, no_rm, bucket), prefixed=True)
                 instance = aws.ec2._ls([instance_id])[0]
                 aws.ec2._retry(instance.create_tags)(Tags=[{'Key': k, 'Value': v}
                                                            for t in tag + ['arg=%s' % arg]
-                                                           for [k, v] in [(t % {'arg': arg}).split('=')]])
+                                                           for [k, v] in [t.split('=')]])
                 logging.info('tagged: %s', aws.ec2._pretty(instance))
                 logging.info('ran cmd against %s for arg %s', instance_id, arg)
             except:
@@ -94,8 +95,25 @@ def launch(name:    'name of all instances',
         logging.info('launch id: %s', launch_id)
 
 
-def launch_ls_logs(owner=None,
-                   bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
+def wait(launch_id):
+    """
+    wait for all instances to stop, and exit 0 only if all instances logged "exited 0".
+    """
+
+def restart_failed(launch_id):
+    """
+    restart, based on ec2 user-data and arg tag, any instance which is not running and has not logged "exited 0".
+    """
+
+
+def ls(launch_id):
+    """
+    show all instances, and their state, ie running|done|failed.
+    """
+
+
+def ls_logs(owner=None,
+            bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
     owner = owner or shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
     keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
@@ -125,10 +143,10 @@ def launch_ls_logs(owner=None,
             print('', 'arg=' + arg)
 
 
-def launch_log(*tags,
-               index=-1,
-               bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
-               tail_only=False):
+def log(*tags,
+        index=-1,
+        bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
+        tail_only=False):
     owner = shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
     keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
@@ -139,11 +157,11 @@ def launch_log(*tags,
     shell.call('aws s3 cp s3://%(bucket)s/%(key)s -' % locals())
 
 
-def launch_logs(*tags,
-                cmd='tail -n 1',
-                max_threads=10,
-                bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
-                tail_only=False):
+def logs(*tags,
+         cmd='tail -n 1',
+         max_threads=10,
+         bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
+         tail_only=False):
     owner = shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
     keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()

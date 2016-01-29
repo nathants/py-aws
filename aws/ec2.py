@@ -169,7 +169,7 @@ def _remote_cmd(cmd):
     return "path=/tmp/$(uuidgen); echo %s | base64 -d > $path; bash $path" % util.strings.b64_encode(cmd)
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, no_tty=False, user='ubuntu', key=None, echo=False):
+def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, no_tty=False, user='ubuntu', key=None, echo=False, prefixed=False):
     """
     tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     """
@@ -195,15 +195,11 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
         if cmd and len(instances) > 1:
             failures = []
             successes = []
-            def run(instance, color):
-                color = (lambda x: x) if quiet else getattr(util.colors, color)
-                # TODO is justify actually stupid?
-                name = (_name(instance) + ': ' + instance.public_dns_name + ': ')
+            def run(instance):
                 def fn():
                     try:
-                        cb = lambda x: print(color(x if quiet else name + x).replace('\r', ''), flush=True)
                         shell.run(*make_ssh_cmd(instance),
-                                  callback=cb,
+                                  callback=_make_callback(instance, quiet),
                                   raw_cmd=True,
                                   stream=False,
                                   hide_stderr=quiet)
@@ -212,7 +208,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
                     else:
                         successes.append(util.colors.green('success: ') + instance.public_dns_name)
                 return fn
-            pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors)), max_threads=max_threads)
+            pool.thread.wait(*map(run, instances), max_threads=max_threads)
             if not quiet:
                 logging.info('\nresults:')
                 for msg in successes + failures:
@@ -220,11 +216,21 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
             if failures:
                 sys.exit(1)
         elif cmd:
-            return shell.run(*make_ssh_cmd(instances[0]), echo=False, stream=True, hide_stderr=quiet, raw_cmd=True)
+            return shell.run(*make_ssh_cmd(instances[0]),
+                             echo=False,
+                             stream=not prefixed,
+                             hide_stderr=quiet,
+                             raw_cmd=True,
+                             callback=_make_callback(instances[0], quiet) if prefixed else None)
         else:
             subprocess.check_call(ssh_cmd + [user + '@' + instances[0].public_dns_name])
     except:
         sys.exit(1)
+
+
+def _make_callback(instance, quiet):
+    name = _name(instance) + ': ' + instance.public_dns_name + ': '
+    return lambda x: print((x if quiet else name + x).replace('\r', ''), flush=True)
 
 
 def scp(src, dst, *tags, yes=False, max_threads=0):
@@ -677,6 +683,7 @@ def new(name:  'name of the instance',
         vpc:   'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  __file__, message='vpc name'),
         gigs:  'gb capacity of primary disk' = 16,
         init:  'cloud init command'          = 'date > /tmp/cloudinit.log',
+        data:  'arbitrary user-data'         = None,
         cmd:   'ssh command'                 = None,
         num:   'number of instances'         = 1,
         spot:  'spot price to bid'           = None,
@@ -689,9 +696,12 @@ def new(name:  'name of the instance',
     owner = shell.run('whoami')
     for tag in tags:
         assert '=' in tag, 'bad tag, should be key=value, not: %s' % tag
-    # TODO being root is not ideal. sudo -u ubuntu ...
-    assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
-    init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash $path' % util.strings.b64_encode(init)
+
+    if data: # you can have either data or init, not both
+        init = '#raw-data\n' + data
+    else:
+        assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
+        init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash $path' % util.strings.b64_encode(init)
     opts = {}
     opts['UserData'] = init
     opts['ImageId'] = ami
@@ -799,6 +809,21 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
         logging.info('wait for image...')
         _client().get_waiter('image_available').wait(ImageIds=[ami_id])
     return ami_id
+
+
+def user_data(*tags, first_n=None, last_n=None, yes=False):
+    assert tags, 'you must specify some tags'
+    instances = _ls(tags, 'all', first_n, last_n)
+    assert len(instances) == 1, 'didnt find exactly one instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    instance = instances[0]
+    logging.info('going to read user-data from the following instance:')
+    logging.info(' ' + _pretty(instance))
+    if is_cli and not yes:
+        logging.info('\nwould you like to proceed? y/n\n')
+        assert pager.getch() == 'y', 'abort'
+    hashbang, *data = util.strings.b64_decode(instance.describe_attribute(InstanceId=instance.instance_id, Attribute='userData')['UserData']['Value']).splitlines()
+    logging.info('type: %s', hashbang)
+    return '\n'.join(data)
 
 
 def main():

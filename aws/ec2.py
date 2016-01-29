@@ -66,11 +66,11 @@ def _tags(instance):
 # TODO cache wildcard looks. they are too slow. ping host and lookup for real on miss.
 def _ls(tags, state='running', first_n=None, last_n=None):
     if isinstance(state, str):
-        assert state in ['running', 'stopped', 'terminated', 'all'], 'no such state: ' + state
+        assert state in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + state
         state = [state]
     else:
         for s in state:
-            assert s in ['running', 'stopped', 'terminated', 'all'], 'no such state: ' + state
+            assert s in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + s
     is_dns_name = tags and tags[0].endswith('.amazonaws.com')
     is_instance_id = tags and re.search(r'i\-[a-zA-Z0-9]{8}', tags[0])
     if tags and not is_dns_name and not is_instance_id and '=' not in tags[0]:

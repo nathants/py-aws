@@ -1,8 +1,10 @@
 import aws.ec2
+import datetime
+import time
+import random
 import json
 import argh
 import logging
-import os
 import pool.thread
 import shell
 import shell.conf
@@ -15,21 +17,14 @@ import util.log
 from unittest import mock
 
 
-# TODO something like `launch restart <instance-id>` would be really
-# handy. good reason to switch to cloud-init? because it's ec2
-# meta-data and accessible out of band? nope. unless we do a ec2.new
-# per instance, there is no way to get unique user-data per instance,
-# and since tags cant be set at creation time, we cant parameterize
-# cloud-init via tags. too many calls to ec2.new will hit api
-# throttling, and result in a more complex solution?
+is_cli = False
 
-# TODO something like `launch wait launch=xxx
 
 def _cmd(arg, cmd, no_rm, bucket):
     _cmd = cmd % {'arg': arg}
     kw = {'bucket': bucket,
-          'user': os.environ['USER'],
-          'date': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
+          'user': shell.run('whoami'),
+          'date': shell.run('date -u +%Y-%m-%dT%H:%M:%SZ'),
           'ip': '$(curl http://169.254.169.254/latest/meta-data/public-hostname/ 2>/dev/null)',
           'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s" % x for x in json.load(sys.stdin)["Tags"] if x["Key"] != "creation-date"]).replace("_", "-"))\')'} # noqa
     upload_log = 'aws s3 cp ~/nohup.out s3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s_%(ip)s/nohup.out >/dev/null 2>&1' % kw
@@ -37,7 +32,7 @@ def _cmd(arg, cmd, no_rm, bucket):
     shutdown = ('sudo halt'
                 if no_rm else
                 'aws ec2 terminate-instances --instance-ids $(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)')
-    return "(set -x; %(_cmd)s; set +x; echo exited $?; %(upload_log)s; %(upload_log_tail)s; %(shutdown)s) >nohup.out 2>nohup.out </dev/null &" % locals()
+    return "(echo %(_cmd)s; %(_cmd)s; echo exited $?; %(upload_log)s; %(upload_log_tail)s; %(shutdown)s) >nohup.out 2>nohup.out </dev/null &" % locals()
 
 
 @argh.arg('--tag', action='append')
@@ -55,7 +50,24 @@ def new(name:    'name of all instances',
         sg:      'security group name'         = shell.conf.get_or_prompt_pref('sg',   aws.ec2.__file__, message='security group name'),
         type:    'instance type'               = shell.conf.get_or_prompt_pref('type', aws.ec2.__file__, message='instance type'),
         vpc:     'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  aws.ec2.__file__, message='vpc name'),
-        gigs:    'gb capacity of primary disk' = 8):
+        gigs:    'gb capacity of primary disk' = 16):
+    for arg in args:
+        assert ' ' not in arg, 'args cannot have spaces: %s' % arg
+    launch_id = str(uuid.uuid4())
+    logging.info('launch=%s', launch_id)
+    data = json.dumps({'name': name,
+                       'args': args,
+                       'pre_cmd': pre_cmd,
+                       'cmd': cmd,
+                       'tag': tag,
+                       'no_rm': no_rm,
+                       'bucket': bucket,
+                       'spot': spot,
+                       'type': type,
+                       'vpc': vpc,
+                       'gigs': gigs})
+    user = shell.run('whoami')
+    shell.run('aws s3 cp - s3://%(bucket)s/ec2_logs/%(user)s/launch=%(launch_id)s.json' % locals(), stdin=data)
     instance_ids = aws.ec2.new(name,
                                spot=spot,
                                key=key,
@@ -64,10 +76,8 @@ def new(name:    'name of all instances',
                                type=type,
                                vpc=vpc,
                                gigs=gigs,
-                               num=len(args),
-                               data=json.dumps({'pre_cmd': pre_cmd, 'cmd': cmd}))
+                               num=len(args))
     errors = []
-    launch_id = str(uuid.uuid4())
     tag = (tag or []) + ['launch=%s' % launch_id]
     def run_cmd(instance_id, arg):
         def fn():
@@ -92,28 +102,83 @@ def new(name:    'name of all instances',
                 logging.info(e)
             sys.exit(1)
     finally:
-        logging.info('launch id: %s', launch_id)
+        return 'launch=%s' % launch_id
 
 
-def wait(launch_id):
+def wait(*tags):
     """
-    wait for all instances to stop, and exit 0 only if all instances logged "exited 0".
+    wait for all args to finish, and exit 0 only if all logged "exited 0".
     """
+    data = json.loads(params(*tags))
+    args = data['args']
+    num = len(args)
+    assert num == len(args), 'num != args, %s != %s' % (num, len(args))
+    while True:
+        instances = aws.ec2._ls(tags, state=['running', 'pending'])
+        logging.info('%s num running: %s', str(datetime.datetime.utcnow()).replace(' ', 'T').split('.')[0], len(instances))
+        if not instances:
+            break
+        time.sleep(5 + 5 * random.random())
+    vals = status(*tags)
+    logging.info('\n'.join(vals))
+    for v in vals:
+        if v.endswith('failed'):
+            sys.exit(1)
 
-def restart_failed(launch_id):
+
+def restart_failed(*tags):
     """
-    restart, based on ec2 user-data and arg tag, any instance which is not running and has not logged "exited 0".
+    restart any arg which is not running and has not logged "exited 0".
     """
+    args_to_restart = []
+    for val in status(*tags):
+        arg, state = val.split()
+        if state == 'failed':
+            logging.info('going to restart failed arg=%s', arg)
+        elif state == 'missing':
+            logging.info('going to restart missing arg=%s', arg)
+    if args_to_restart:
+        logging.info('restarting:')
+        for arg in args_to_restart:
+            logging.info(' %s', arg)
+        # return new(data['name'], *args_to_restart, **util.dicts.drop(data, ['name', 'args']))
+    else:
+        logging.info('nothing to restart')
 
 
-def ls(launch_id):
+def params(*tags,
+           bucket: 's3 bucket to upload logs to' = shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
+    launch_id = [x for x in tags if x.startswith('launch=')][0].split('launch=')[-1]
+    user = shell.run('whoami')
+    return json.dumps(json.loads(shell.run('aws s3 cp s3://%(bucket)s/ec2_logs/%(user)s/launch=%(launch_id)s.json -' % locals())), indent=4)
+
+
+def status(*tags):
     """
-    show all instances, and their state, ie running|done|failed.
+    show all instances, and their state, ie running|done|failed|missing.
     """
+    data = json.loads(params(*tags))
+    with util.log.disable(''):
+        results = [x.split(':') for x in logs(*tags, cmd='tail -n1', tail_only=True)]
+    fail_args = [arg.split('arg=')[-1] for arg, _, exit in results if exit != 'exited 0']
+    done_args = [arg.split('arg=')[-1] for arg, _, exit in results if exit == 'exited 0']
+    running_args = [aws.ec2_tag(i)['arg'] for i in aws.ec2._ls(tags, state='running')]
+    vals = []
+    for arg in sorted(data['args']):
+        if arg in fail_args:
+            vals.append('arg=%s failed' % arg)
+        elif arg in done_args:
+            vals.append('arg=%s done' % arg)
+        elif arg in running_args:
+            vals.append('arg=%s running' % arg)
+        else:
+            vals.append('arg=%s missing' % arg)
+    return vals
 
 
 def ls_logs(owner=None,
-            bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
+            bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
+            name_only=False):
     owner = owner or shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
     keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
@@ -131,22 +196,24 @@ def ls_logs(owner=None,
     keys = util.iter.groupby(keys, lambda x: x['tags']['launch'])
     keys = sorted(keys, key=lambda x: x[1][0]['date']) # TODO date should be identical for all launchees, currently is distinct.
     for launch, xs in keys:
-        print('\n' +
-              'Name=' + xs[0]['tags']['Name'],
+        print(xs[0]['tags']['Name'],
               'launch=' + launch,
               'date=' + xs[0]['date'])
-        print(*['%(k)s=%(v)s' % locals()
-                for k, v in xs[0]['tags'].items()
-                if k not in ['Name', 'arg', 'launch', 'nth', 'num']])
-        args = sorted([x['tags']['arg'] for x in xs])
-        for arg in args:
-            print('', 'arg=' + arg)
+        if not name_only:
+            print('', *['%(k)s=%(v)s' % locals()
+                        for k, v in xs[0]['tags'].items()
+                        if k not in ['Name', 'arg', 'launch', 'nth', 'num']])
+            args = sorted([x['tags']['arg'] for x in xs])
+            for arg in args:
+                print(' ', 'arg=' + arg)
+            print('')
 
 
 def log(*tags,
         index=-1,
         bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
         tail_only=False):
+    assert tags, 'you must provide some tags'
     owner = shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
     keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
@@ -162,6 +229,7 @@ def logs(*tags,
          max_threads=10,
          bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
          tail_only=False):
+    assert tags, 'you must provide some tags'
     owner = shell.run('whoami')
     prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
     keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
@@ -169,20 +237,26 @@ def logs(*tags,
     keys = [key.split()[-1] for key in keys]
     keys = [key for key in keys if all(t in key for t in tags)]
     fail = False
+    vals = []
     def f(key, cmd, bucket):
         date, tags, ip = key.split('/')[-2].split('_')
         arg = [x for x in tags.split(',') if x.startswith('arg=')][0]
         try:
-            print('[%s exit 0]' % arg, shell.run(('aws s3 cp s3://%(bucket)s/%(key)s - |' + cmd) % locals()))
+            val = '%s:exited 0:%s' % (arg, shell.run(('aws s3 cp s3://%(bucket)s/%(key)s - |' + cmd) % locals()))
         except AssertionError:
-            print('[%s exit 1]' % arg)
+            val = '%s:exited 1:' % arg
             fail = True
+        logging.info(val)
+        vals.append(val)
     pool.thread.wait(*[(f, [key, cmd, bucket]) for key in keys], max_threads=max_threads)
     if fail:
         sys.exit(1)
+    else:
+        return sorted(vals)
 
 
 def main():
+    globals()['is_cli'] = True
     shell.ignore_closed_pipes()
     with util.log.disable('botocore', 'boto3'):
         try:

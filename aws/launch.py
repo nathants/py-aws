@@ -51,7 +51,7 @@ def new(name:    'name of all instances',
         sg:      'security group name'         = shell.conf.get_or_prompt_pref('sg',   aws.ec2.__file__, message='security group name'),
         type:    'instance type'               = shell.conf.get_or_prompt_pref('type', aws.ec2.__file__, message='instance type'),
         vpc:     'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  aws.ec2.__file__, message='vpc name'),
-        gigs:    'gb capacity of primary disk' = 16):
+        gigs:    'gb capacity of primary disk' = 8):
     for arg in args:
         assert ' ' not in arg, 'args cannot have spaces: %s' % arg
     if os.path.exists(pre_cmd):

@@ -42,9 +42,9 @@ def _retry(f):
         for i in range(4):
             try:
                 return f(*a, **kw)
-            except Exception as e:
+            except:
                 if i == 3:
-                    raise e
+                    raise
                 time.sleep(i + random.random())
     return fn
 
@@ -605,8 +605,10 @@ def revoke(ip, *names, yes=False):
 
 
 def amis(*name_fragments):
-    name_fragments = ('ubuntu/images/',) + name_fragments
-    amis = _resource().images.filter(Owners=['self'])
+    name_fragments = name_fragments
+    amis = _resource().images.filter(Owners=['self'],
+                                     Filters=[{'Name': 'name',
+                                               'Values': ['*%s*' % '*'.join(name_fragments)]}])
     amis = sorted(amis, key=lambda x: x.creation_date, reverse=True)
     for ami in amis:
         print('%s %s' % (util.colors.green(ami.image_id), ami.name))

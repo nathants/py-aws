@@ -445,7 +445,6 @@ def _wait_for_ssh(*instances):
             assert len(ip(*[i.instance_id for i in instances])) == len(instances) # eventual consistency is the best, you'd think the waiter would have covered this
             return [i.public_dns_name for i in instances]
         except:
-            logging.info('trying ssh...')
             time.sleep(max(0, timeout - (time.time() - start)))
     assert False, 'failed to wait for ssh'
 

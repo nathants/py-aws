@@ -118,10 +118,6 @@ def wait(*tags):
     """
     wait for all args to finish, and exit 0 only if all logged "exited 0".
     """
-    data = json.loads(params(*tags))
-    args = data['args']
-    num = len(args)
-    assert num == len(args), 'num != args, %s != %s' % (num, len(args))
     while True:
         instances = aws.ec2._ls(tags, state=['running', 'pending'])
         logging.info('%s num running: %s', str(datetime.datetime.utcnow()).replace(' ', 'T').split('.')[0], len(instances))
@@ -131,7 +127,7 @@ def wait(*tags):
     vals = status(*tags)
     logging.info('\n'.join(vals))
     for v in vals:
-        if v.endswith('failed'):
+        if not v.endswith('done'):
             sys.exit(1)
 
 
@@ -139,18 +135,22 @@ def restart_failed(*tags):
     """
     restart any arg which is not running and has not logged "exited 0".
     """
+    data = json.loads(params(*tags))
     args_to_restart = []
     for val in status(*tags):
         arg, state = val.split()
+        arg = arg.split('arg=')[-1]
         if state == 'failed':
             logging.info('going to restart failed arg=%s', arg)
+            args_to_restart.append(arg)
         elif state == 'missing':
             logging.info('going to restart missing arg=%s', arg)
+            args_to_restart.append(arg)
     if args_to_restart:
         logging.info('restarting:')
         for arg in args_to_restart:
             logging.info(' %s', arg)
-        # return new(data['name'], *args_to_restart, **util.dicts.drop(data, ['name', 'args']))
+        return new(data['name'], *args_to_restart, **util.dicts.drop(data, ['name', 'args']))
     else:
         logging.info('nothing to restart')
 

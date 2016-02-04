@@ -22,6 +22,17 @@ from unittest import mock
 is_cli = False
 
 
+def _tagify(old):
+    new = (old
+           .replace(',', '-')
+           .replace(' ', '-')
+           .replace('_', '-')
+           .replace('/', '-'))
+    if new != old:
+        logging.info("tagified label: '%s' -> '%s'", old, new)
+    return new
+
+
 def _cmd(arg, cmd, no_rm, bucket):
     _cmd = cmd % {'arg': arg}
     kw = {'bucket': bucket,
@@ -61,10 +72,7 @@ def new(name:    'name of all instances',
         assert len(args) == len(labels), 'there must be an equal number of args and labels, %s != %s' % (len(args), len(labels))
     else:
         labels = args
-    for label in labels:
-        assert ' ' not in label, 'labels cannot have spaces: %s' % label
-        assert '/' not in label, 'labels cannot have slashes: %s' % label
-        assert ',' not in label, 'labels cannot have commas: %s' % label
+    labels = [_tagify(x) for x in labels]
     for tag in tags:
         assert '=' in tag, 'tags should be "<key>=<value>", not: %s' % tag
     for label, arg in zip(labels, args):

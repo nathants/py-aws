@@ -24,15 +24,13 @@ is_cli = False
 
 def _cmd(arg, cmd, no_rm, bucket):
     _cmd = cmd % {'arg': arg}
-    # TODO we probably want instance-id instead of public-hostname. everybody gets stopped, or rm'd, so its not much use? just drop it?
-    # TODO do we want all tags? or just label? # ie just /{date}_{launch}_{label}.nohup ?
     kw = {'bucket': bucket,
           'user': shell.run('whoami'),
           'date': shell.run('date -u +%Y-%m-%dT%H:%M:%SZ'),
-          'ip': '$(curl http://169.254.169.254/latest/meta-data/public-hostname/ 2>/dev/null)',
-          'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s".replace(",", "-").replace("/", "-").replace(" ", "-") % x for x in json.load(sys.stdin)["Tags"] if x["Key"] != "creation-date"]).replace("_", "-"))\')'} # noqa
-    upload_log = 'aws s3 cp ~/nohup.out s3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s_%(ip)s/nohup.out >/dev/null 2>&1' % kw
-    upload_log_tail = 'tail -n 1000 ~/nohup.out > ~/nohup.out.tail; aws s3 cp ~/nohup.out.tail s3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s_%(ip)s/nohup.out.tail >/dev/null 2>&1' % kw
+          'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s".replace(",", "-") % x for x in json.load(sys.stdin)["Tags"]]).replace("/", "-").replace(" ", "-").replace("_", "-"))\')'} # noqa
+    path = 's3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s' % kw
+    upload_log = 'aws s3 cp ~/nohup.out %(path)s/nohup.out >/dev/null 2>&1' % locals()
+    upload_log_tail = 'tail -n 1000 ~/nohup.out > ~/nohup.out.tail; aws s3 cp ~/nohup.out.tail %(path)s/nohup.out.tail >/dev/null 2>&1' % locals()
     shutdown = ('sudo halt'
                 if no_rm else
                 'aws ec2 terminate-instances --instance-ids $(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)')
@@ -217,14 +215,13 @@ def ls_logs(owner=None,
     keys = [key for key in keys if 'launch=' in key]
     keys = [key for key in keys if key.endswith('nohup.out')]
     keys = [key.split('/')[-2].split('_') for key in keys]
-    keys = [key for key in keys if len(key) == 3]
+    keys = [key for key in keys if len(key) == 2]
     keys = [{'date': date,
              'tags': {key: v
                       for x in tags.split(',')
                       if '=' in x
-                      for key, v in [x.split('=', 1)]},
-             'ip': ip}
-            for date, tags, ip in keys]
+                      for key, v in [x.split('=', 1)]}}
+            for date, tags in keys]
     keys = [key for key in keys if 'launch' in key['tags']]
     keys = util.iter.groupby(keys, lambda x: x['tags']['launch'])
     keys = sorted(keys, key=lambda x: x[1][0]['date']) # TODO date should be identical for all launchees, currently is distinct.
@@ -272,7 +269,7 @@ def logs(*tags,
     fail = False
     vals = []
     def f(key, cmd, bucket):
-        date, tags, ip = key.split('/')[-2].split('_')
+        date, tags = key.split('/')[-2].split('_')
         label = [x for x in tags.split(',') if x.startswith('label=')][0]
         try:
             val = '%s::exited 0::%s' % (label, shell.run(('aws s3 cp s3://%(bucket)s/%(key)s - |' + cmd) % locals()))
@@ -291,7 +288,7 @@ def logs(*tags,
 def main():
     globals()['is_cli'] = True
     shell.ignore_closed_pipes()
-    util.log.setup(short=True)
+    util.log.setup(format='%(message)s')
     with util.log.disable('botocore', 'boto3'):
         try:
             stream = util.hacks.override('--stream')

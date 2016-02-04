@@ -854,7 +854,7 @@ def user_data(*tags, first_n=None, last_n=None, yes=False):
 def main():
     globals()['is_cli'] = True
     shell.ignore_closed_pipes()
-    util.log.setup(short=True)
+    util.log.setup(format='%(message)s')
     with util.log.disable('botocore', 'boto3'):
         try:
             stream = util.hacks.override('--stream')

@@ -674,7 +674,7 @@ def _create_spot_instances(**opts):
     instance_ids = [x['InstanceId'] for x in _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)['SpotInstanceRequests']]
     logging.info('request fulfilled with instance-ids:\n%s', '\n'.join(instance_ids))
     logging.info('wait for instances...')
-    return _wait_until('running', instance_ids)
+    return _wait_until('running', *instance_ids)
 
 
 def _make_spot_opts(spot, **opts):

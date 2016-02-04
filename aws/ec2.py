@@ -28,9 +28,6 @@ from unittest import mock
 is_cli = False
 
 
-util.log.setup(format='%(message)s')
-
-
 ssh_args = ' -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no '
 
 
@@ -121,24 +118,28 @@ def _matches(instance, tags):
 
 
 def _pretty(instance, ip=False, all_tags=False):
-    if instance.state['Name'] == 'running':
-        color = util.colors.green
-    elif instance.state['Name'] == 'pending':
-        color = util.colors.cyan
-    else:
-        color = util.colors.red
-    return ' '.join(filter(None, [
-        color(_name(instance)),
-        instance.instance_type,
-        instance.state['Name'],
-        instance.instance_id,
-        (instance.public_dns_name or '<no-ip>' if ip else None),
-        ','.join([x['GroupName'] for x in instance.security_groups]),
-        ' '.join('%s=%s' % (k, v)
-                 for k, v in sorted(_tags(instance).items(), key=lambda x: x[0])
-                 if (all_tags or k not in ['Name', 'creation-date', 'owner', 'launch'])
-                 and v),
-    ]))
+    @_retry
+    def f():
+        if instance.state['Name'] == 'running':
+            color = util.colors.green
+        elif instance.state['Name'] == 'pending':
+            color = util.colors.cyan
+        else:
+            color = util.colors.red
+        return ' '.join(filter(None, [
+            color(_name(instance)),
+            instance.instance_type,
+            instance.state['Name'],
+            instance.instance_id,
+            (instance.public_dns_name or '<no-ip>' if ip else None),
+            ','.join([x['GroupName'] for x in instance.security_groups]),
+            ' '.join('%s=%s' % (k, v)
+                     for k, v in sorted(_tags(instance).items(), key=lambda x: x[0])
+                     if (all_tags or k not in ['Name', 'creation-date', 'owner', 'launch'])
+                     and v),
+        ]))
+    return f()
+
 
 def _name(instance):
     return _tags(instance).get('Name', '<no-name>').replace(' ', '_')
@@ -164,9 +165,7 @@ def ls(*tags, state='all', first_n=None, last_n=None, ip=False, all_tags=False):
 
 
 def _remote_cmd(cmd):
-    # TODO is hygiene more important than debugability? rm $path
-    # return "path=/tmp/$(uuidgen); echo %s | base64 -d > $path; bash $path; code=$?; rm $path; exit $code" % util.strings.b64_encode(cmd)
-    return "path=/tmp/$(uuidgen); echo %s | base64 -d > $path; bash $path" % util.strings.b64_encode(cmd)
+    return "mkdir -p ~/.cmds; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path; bash $path" % util.strings.b64_encode(cmd)
 
 
 def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, no_tty=False, user='ubuntu', key=None, echo=False, prefixed=False):
@@ -703,6 +702,8 @@ def new(name:  'name of the instance',
         spot:  'spot price to bid'           = None,
         tty:   'run cmd in a tty'            = False,
         login: 'login into the instance'     = False):
+    if spot:
+        spot = float(spot)
     assert not (spot and type.startswith('t2.')), 't2.* instances cant use spot pricing'
     if vpc.lower() == 'none':
         vpc = None
@@ -718,7 +719,10 @@ def new(name:  'name of the instance',
     if ami in ubuntus:
         distro = ami
         ami, _ = [x for x in amis_ubuntu() if ubuntus[distro] in x][0].split()
-        logging.info('using latest ubuntu:%s %s', distro, ami)
+        logging.info('using ami ubuntu:%s %s', distro, ami)
+    else:
+        ami = ami.strip()
+        logging.info('using ami: %s', ami)
     opts = {}
     opts['UserData'] = init
     opts['ImageId'] = ami
@@ -850,6 +854,7 @@ def user_data(*tags, first_n=None, last_n=None, yes=False):
 def main():
     globals()['is_cli'] = True
     shell.ignore_closed_pipes()
+    util.log.setup(short=True)
     with util.log.disable('botocore', 'boto3'):
         try:
             stream = util.hacks.override('--stream')

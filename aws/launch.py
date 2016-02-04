@@ -1,4 +1,5 @@
 import aws.ec2
+import re
 import os
 import datetime
 import time
@@ -23,11 +24,13 @@ is_cli = False
 
 def _cmd(arg, cmd, no_rm, bucket):
     _cmd = cmd % {'arg': arg}
+    # TODO we probably want instance-id instead of public-hostname. everybody gets stopped, or rm'd, so its not much use? just drop it?
+    # TODO do we want all tags? or just label? # ie just /{date}_{launch}_{label}.nohup ?
     kw = {'bucket': bucket,
           'user': shell.run('whoami'),
           'date': shell.run('date -u +%Y-%m-%dT%H:%M:%SZ'),
           'ip': '$(curl http://169.254.169.254/latest/meta-data/public-hostname/ 2>/dev/null)',
-          'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s" % x for x in json.load(sys.stdin)["Tags"] if x["Key"] != "creation-date"]).replace("_", "-"))\')'} # noqa
+          'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s".replace(",", "-").replace("/", "-").replace(" ", "-") % x for x in json.load(sys.stdin)["Tags"] if x["Key"] != "creation-date"]).replace("_", "-"))\')'} # noqa
     upload_log = 'aws s3 cp ~/nohup.out s3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s_%(ip)s/nohup.out >/dev/null 2>&1' % kw
     upload_log_tail = 'tail -n 1000 ~/nohup.out > ~/nohup.out.tail; aws s3 cp ~/nohup.out.tail s3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s_%(ip)s/nohup.out.tail >/dev/null 2>&1' % kw
     shutdown = ('sudo halt'
@@ -37,8 +40,11 @@ def _cmd(arg, cmd, no_rm, bucket):
 
 
 @argh.arg('--tag', action='append')
+@argh.arg('--arg', action='append')
+@argh.arg('--label', action='append')
 def new(name:    'name of all instances',
-        *args:   'one instance per arg, and that arg is str formatted into cmd, pre_cmd, and tags via %(arg)s',
+        arg:     'one instance per arg, and that arg is str formatted into cmd, pre_cmd, and tags as "arg"' = None,
+        label:   'one label per arg, to use as ec2 tag since arg is often inapproriate, defaults to arg if not provided' = None,
         pre_cmd: 'optional cmd which runs before cmd is backgrounded' = None,
         cmd:     'cmd which is run in the background' = None,
         tag:     'tag to set as "<key>=<value>' = None,
@@ -52,9 +58,23 @@ def new(name:    'name of all instances',
         type:    'instance type'               = shell.conf.get_or_prompt_pref('type', aws.ec2.__file__, message='instance type'),
         vpc:     'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  aws.ec2.__file__, message='vpc name'),
         gigs:    'gb capacity of primary disk' = 8):
-    for arg in args:
-        assert ' ' not in arg, 'args cannot have spaces: %s' % arg
-    if os.path.exists(pre_cmd):
+    tags, args, labels = tuple(tag or ()), tuple(arg or ()), tuple(label or ())
+    if labels:
+        assert len(args) == len(labels), 'there must be an equal number of args and labels, %s != %s' % (len(args), len(labels))
+    else:
+        labels = args
+    for label in labels:
+        assert ' ' not in label, 'labels cannot have spaces: %s' % label
+        assert '/' not in label, 'labels cannot have slashes: %s' % label
+        assert ',' not in label, 'labels cannot have commas: %s' % label
+    for tag in tags:
+        assert '=' in tag, 'tags should be "<key>=<value>", not: %s' % tag
+    for label, arg in zip(labels, args):
+        if label == arg:
+            logging.info('going to launch arg: %s', arg)
+        else:
+            logging.info('going to launch label: %s, arg: %s', label, arg)
+    if pre_cmd and os.path.exists(pre_cmd):
         logging.info('reading pre_cmd from file: %s', os.path.abspath(pre_cmd))
         with open(pre_cmd) as f:
             pre_cmd = f.read()
@@ -66,9 +86,10 @@ def new(name:    'name of all instances',
     logging.info('launch=%s', launch_id)
     data = json.dumps({'name': name,
                        'args': args,
+                       'labels': labels,
                        'pre_cmd': pre_cmd,
                        'cmd': cmd,
-                       'tag': tag,
+                       'tags': tags,
                        'no_rm': no_rm,
                        'bucket': bucket,
                        'spot': spot,
@@ -87,8 +108,8 @@ def new(name:    'name of all instances',
                                gigs=gigs,
                                num=len(args))
     errors = []
-    tag = (tag or []) + ['launch=%s' % launch_id]
-    def run_cmd(instance_id, arg):
+    tags += ('launch=%s' % launch_id,)
+    def run_cmd(instance_id, arg, label):
         def fn():
             try:
                 if pre_cmd:
@@ -96,14 +117,14 @@ def new(name:    'name of all instances',
                 aws.ec2.ssh(instance_id, no_tty=True, yes=True, cmd=_cmd(arg, cmd, no_rm, bucket), prefixed=True)
                 instance = aws.ec2._ls([instance_id])[0]
                 aws.ec2._retry(instance.create_tags)(Tags=[{'Key': k, 'Value': v}
-                                                           for t in tag + ['arg=%s' % arg]
-                                                           for [k, v] in [t.split('=')]])
+                                                           for tag in tags + ('label=%s' % label,)
+                                                           for [k, v] in [tag.split('=', 1)]])
                 logging.info('tagged: %s', aws.ec2._pretty(instance))
-                logging.info('ran cmd against %s for arg %s', instance_id, arg)
+                logging.info('ran cmd against %s for label %s', instance_id, label)
             except:
                 errors.append(traceback.format_exc())
         return fn
-    pool.thread.wait(*map(run_cmd, instance_ids, args))
+    pool.thread.wait(*map(run_cmd, instance_ids, args, labels))
     try:
         if errors:
             logging.info(util.colors.red('errors:'))
@@ -118,16 +139,17 @@ def wait(*tags):
     """
     wait for all args to finish, and exit 0 only if all logged "exited 0".
     """
+    logging.info('wait for launch: %s', ' '.join(tags))
     while True:
         instances = aws.ec2._ls(tags, state=['running', 'pending'])
         logging.info('%s num running: %s', str(datetime.datetime.utcnow()).replace(' ', 'T').split('.')[0], len(instances))
         if not instances:
             break
-        time.sleep(5 + 5 * random.random())
+        time.sleep(5 + 10 * random.random())
     vals = status(*tags)
     logging.info('\n'.join(vals))
     for v in vals:
-        if not v.endswith('done'):
+        if not v.startswith('done'):
             sys.exit(1)
 
 
@@ -138,8 +160,8 @@ def restart_failed(*tags):
     data = json.loads(params(*tags))
     args_to_restart = []
     for val in status(*tags):
-        arg, state = val.split()
-        arg = arg.split('arg=')[-1]
+        state, arg = val.split()
+        arg = arg.split('arg=', 1)[-1]
         if state == 'failed':
             logging.info('going to restart failed arg=%s', arg)
             args_to_restart.append(arg)
@@ -150,6 +172,7 @@ def restart_failed(*tags):
         logging.info('restarting:')
         for arg in args_to_restart:
             logging.info(' %s', arg)
+        assert False, 'we need to pull args from data, not tags, because tags get _tagified(), and also have a 255 char limit?'
         return new(data['name'], *args_to_restart, **util.dicts.drop(data, ['name', 'args']))
     else:
         logging.info('nothing to restart')
@@ -157,7 +180,7 @@ def restart_failed(*tags):
 
 def params(*tags,
            bucket: 's3 bucket to upload logs to' = shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
-    launch_id = [x for x in tags if x.startswith('launch=')][0].split('launch=')[-1]
+    launch_id = [x for x in tags if x.startswith('launch=')][0].split('launch=', 1)[-1]
     user = shell.run('whoami')
     return json.dumps(json.loads(shell.run('aws s3 cp s3://%(bucket)s/ec2_logs/%(user)s/launch=%(launch_id)s.json -' % locals())), indent=4)
 
@@ -168,20 +191,20 @@ def status(*tags):
     """
     data = json.loads(params(*tags))
     with util.log.disable(''):
-        results = [x.split(':') for x in logs(*tags, cmd='tail -n1', tail_only=True)]
-    fail_args = [arg.split('arg=')[-1] for arg, _, exit in results if exit != 'exited 0']
-    done_args = [arg.split('arg=')[-1] for arg, _, exit in results if exit == 'exited 0']
-    running_args = [aws.ec2_tag(i)['arg'] for i in aws.ec2._ls(tags, state='running')]
+        results = [re.split('::', x) for x in logs(*tags, cmd='tail -n1', tail_only=True)]
+    fail_labels = [label.split('label=', 1)[-1] for label, _, exit in results if exit != 'exited 0']
+    done_labels = [label.split('label=', 1)[-1] for label, _, exit in results if exit == 'exited 0']
+    running_labels = [aws.ec2_tag(i)['label'] for i in aws.ec2._ls(tags, state='running')]
     vals = []
-    for arg in sorted(data['args']):
-        if arg in fail_args:
-            vals.append('arg=%s failed' % arg)
-        elif arg in done_args:
-            vals.append('arg=%s done' % arg)
-        elif arg in running_args:
-            vals.append('arg=%s running' % arg)
+    for label in sorted(data['labels']):
+        if label in fail_labels:
+            vals.append('failed label=%s' % label)
+        elif label in done_labels:
+            vals.append('done label=%s' % label)
+        elif label in running_labels:
+            vals.append('running label=%s' % label)
         else:
-            vals.append('arg=%s missing' % arg)
+            vals.append('missing label=%s' % label)
     return vals
 
 
@@ -199,9 +222,10 @@ def ls_logs(owner=None,
              'tags': {key: v
                       for x in tags.split(',')
                       if '=' in x
-                      for key, v in [x.split('=')]},
+                      for key, v in [x.split('=', 1)]},
              'ip': ip}
             for date, tags, ip in keys]
+    keys = [key for key in keys if 'launch' in key['tags']]
     keys = util.iter.groupby(keys, lambda x: x['tags']['launch'])
     keys = sorted(keys, key=lambda x: x[1][0]['date']) # TODO date should be identical for all launchees, currently is distinct.
     for launch, xs in keys:
@@ -211,10 +235,10 @@ def ls_logs(owner=None,
         if not name_only:
             print('', *['%(k)s=%(v)s' % locals()
                         for k, v in xs[0]['tags'].items()
-                        if k not in ['Name', 'arg', 'launch', 'nth', 'num']])
-            args = sorted([x['tags']['arg'] for x in xs])
-            for arg in args:
-                print(' ', 'arg=' + arg)
+                        if k not in ['Name', 'arg', 'label', 'launch', 'nth', 'num']])
+            labels = sorted([x['tags']['label'] for x in xs])
+            for label in labels:
+                print(' ', 'label=' + label)
             print('')
 
 
@@ -249,11 +273,11 @@ def logs(*tags,
     vals = []
     def f(key, cmd, bucket):
         date, tags, ip = key.split('/')[-2].split('_')
-        arg = [x for x in tags.split(',') if x.startswith('arg=')][0]
+        label = [x for x in tags.split(',') if x.startswith('label=')][0]
         try:
-            val = '%s:exited 0:%s' % (arg, shell.run(('aws s3 cp s3://%(bucket)s/%(key)s - |' + cmd) % locals()))
+            val = '%s::exited 0::%s' % (label, shell.run(('aws s3 cp s3://%(bucket)s/%(key)s - |' + cmd) % locals()))
         except AssertionError:
-            val = '%s:exited 1:' % arg
+            val = '%s::exited 1::' % label
             fail = True
         logging.info(val)
         vals.append(val)
@@ -267,6 +291,7 @@ def logs(*tags,
 def main():
     globals()['is_cli'] = True
     shell.ignore_closed_pipes()
+    util.log.setup(short=True)
     with util.log.disable('botocore', 'boto3'):
         try:
             stream = util.hacks.override('--stream')

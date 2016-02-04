@@ -606,7 +606,9 @@ def amis(*name_fragments):
     name_fragments = name_fragments
     amis = _resource().images.filter(Owners=['self'],
                                      Filters=[{'Name': 'name',
-                                               'Values': ['*%s*' % '*'.join(name_fragments)]}])
+                                               'Values': ['*%s*' % '*'.join(name_fragments)]},
+                                              {'Name': 'state',
+                                               'Values': ['available']}])
     amis = sorted(amis, key=lambda x: x.creation_date, reverse=True)
     for ami in amis:
         print('%s %s' % (util.colors.green(ami.image_id), ami.name))
@@ -832,6 +834,7 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
     ami_id = instance.create_image(Name=name, Description=description).image_id
     if not no_wait:
         logging.info('wait for image...')
+        # TODO this appears to wait way longer than necessary. instead, wait until ami-id appears in amis(name)
         _client().get_waiter('image_available').wait(ImageIds=[ami_id])
     return ami_id
 

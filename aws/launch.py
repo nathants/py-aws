@@ -101,6 +101,9 @@ def new(name:    'name of all instances',
                        'no_rm': no_rm,
                        'bucket': bucket,
                        'spot': spot,
+                       'key': key,
+                       'ami': ami,
+                       'sg': sg,
                        'type': type,
                        'vpc': vpc,
                        'gigs': gigs})
@@ -161,7 +164,7 @@ def wait(*tags):
             sys.exit(1)
 
 
-def restart_failed(*tags, cmd=None):
+def restart_failed(*tags, cmd=None, yes=False):
     """
     restart any arg which is not running and has not logged "exited 0".
     """
@@ -171,28 +174,37 @@ def restart_failed(*tags, cmd=None):
         new_data = json.loads(shell.run(cmd, stdin=text))
         for k in data:
             if data[k] != new_data[k]:
-                logging.info('key modified by cmd: %s', k)
-                logging.info('old val:\n%s', pprint.pformat(data[k]))
-                logging.info('new val:\n%s', pprint.pformat(new_data[k]))
-        logging.info('\nwould you like to proceed? y/n\n')
-        assert pager.getch() == 'y', 'abort'
+                logging.info('\nold: %s', {k: data[k]})
+                logging.info('new: %s', {k: new_data[k]})
+        if not yes:
+            logging.info('\nwould you like to proceed? y/n\n')
+            assert pager.getch() == 'y', 'abort'
         data = new_data
-    args_to_restart = []
+    labels_to_restart = []
     for val in status(*tags):
-        state, arg = val.split()
-        arg = arg.split('arg=', 1)[-1]
+        state, label = val.split()
+        label = label.split('label=', 1)[-1]
         if state == 'failed':
-            logging.info('going to restart failed arg=%s', arg)
-            args_to_restart.append(arg)
+            logging.info('going to restart failed label=%s', label)
+            labels_to_restart.append(label)
         elif state == 'missing':
-            logging.info('going to restart missing arg=%s', arg)
-            args_to_restart.append(arg)
-    if args_to_restart:
+            logging.info('going to restart missing label=%s', label)
+            labels_to_restart.append(label)
+    if labels_to_restart:
+        if not yes:
+            logging.info('\nwould you like to proceed? y/n\n')
+            assert pager.getch() == 'y', 'abort'
         logging.info('restarting:')
-        for arg in args_to_restart:
-            logging.info(' %s', arg)
-        assert False, 'we need to pull args from data, not tags, because tags get _tagified(), and also have a 255 char limit?'
-        return new(data['name'], *args_to_restart, **util.dicts.drop(data, ['name', 'args']))
+        for label in labels_to_restart:
+            logging.info(' %s', label)
+        args_to_restart = [arg
+                           for arg, label in zip(data['args'], data['labels'])
+                           if label in labels_to_restart]
+        return new(name=data['name'],
+                   arg=args_to_restart,
+                   label=labels_to_restart,
+                   tag=data['tags'],
+                   **util.dicts.drop(data, ['name', 'args', 'labels', 'tags']))
     else:
         logging.info('nothing to restart')
 

@@ -1,4 +1,6 @@
 import aws.ec2
+import pprint
+import pager
 import re
 import os
 import datetime
@@ -159,11 +161,22 @@ def wait(*tags):
             sys.exit(1)
 
 
-def restart_failed(*tags):
+def restart_failed(*tags, cmd=None):
     """
     restart any arg which is not running and has not logged "exited 0".
     """
-    data = json.loads(params(*tags))
+    text = params(*tags)
+    data = json.loads(text)
+    if cmd:
+        new_data = json.loads(shell.run(cmd, stdin=text))
+        for k in data:
+            if data[k] != new_data[k]:
+                logging.info('key modified by cmd: %s', k)
+                logging.info('old val:\n%s', pprint.pformat(data[k]))
+                logging.info('new val:\n%s', pprint.pformat(new_data[k]))
+        logging.info('\nwould you like to proceed? y/n\n')
+        assert pager.getch() == 'y', 'abort'
+        data = new_data
     args_to_restart = []
     for val in status(*tags):
         state, arg = val.split()
@@ -200,7 +213,7 @@ def status(*tags):
         results = [re.split('::', x) for x in logs(*tags, cmd='tail -n1', tail_only=True)]
     fail_labels = [label.split('label=', 1)[-1] for label, _, exit in results if exit != 'exited 0']
     done_labels = [label.split('label=', 1)[-1] for label, _, exit in results if exit == 'exited 0']
-    running_labels = [aws.ec2_tag(i)['label'] for i in aws.ec2._ls(tags, state='running')]
+    running_labels = [aws.ec2._tags(i)['label'] for i in aws.ec2._ls(tags, state='running')]
     vals = []
     for label in sorted(data['labels']):
         if label in fail_labels:
@@ -211,7 +224,19 @@ def status(*tags):
             vals.append('running label=%s' % label)
         else:
             vals.append('missing label=%s' % label)
-    return vals
+    return sorted(vals, key=lambda x: x.split()[0], reverse=True)
+
+
+def ls_params(owner=None,
+              bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
+    user = owner or shell.run('whoami') # noqa
+    vals = ['%(date)sT%(time)s %(name)s' % locals()
+            for x in shell.run('aws s3 ls s3://%(bucket)s/ec2_logs/%(user)s/' % locals()).splitlines()
+            for name in [x.split()[-1]]
+            if name.startswith('launch=') and name.endswith('.json')
+            for date, time, _, _ in [x.split()]
+            for name in [name.split('.json')[0]]]
+    return sorted(vals, reverse=True)
 
 
 def ls_logs(owner=None,

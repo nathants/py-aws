@@ -70,6 +70,7 @@ def new(name:    'name of all instances',
         vpc:     'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  aws.ec2.__file__, message='vpc name'),
         gigs:    'gb capacity of primary disk' = 8):
     tags, args, labels = tuple(tag or ()), tuple(arg or ()), tuple(label or ())
+    args = [str(a) for a in args]
     if labels:
         assert len(args) == len(labels), 'there must be an equal number of args and labels, %s != %s' % (len(args), len(labels))
     else:
@@ -164,7 +165,17 @@ def wait(*tags):
             sys.exit(1)
 
 
-def restart_failed(*tags, cmd=None, yes=False):
+def from_params(params_path):
+    with open(params_path) as f:
+        data = json.load(f)
+    return new(name=data['name'],
+               arg=data['args'],
+               label=data['labels'],
+               tag=data['tags'],
+               **util.dicts.drop(data, ['name', 'args', 'labels', 'tags']))
+
+
+def restart(*tags, cmd=None, yes=False, only_failed=False):
     """
     restart any arg which is not running and has not logged "exited 0".
     """
@@ -189,6 +200,9 @@ def restart_failed(*tags, cmd=None, yes=False):
             labels_to_restart.append(label)
         elif state == 'missing':
             logging.info('going to restart missing label=%s', label)
+            labels_to_restart.append(label)
+        elif not only_failed:
+            logging.info('going to restart label=%s', label)
             labels_to_restart.append(label)
     if labels_to_restart:
         if not yes:

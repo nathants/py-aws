@@ -173,7 +173,12 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
     tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     """
     assert tags, 'you must specify some tags'
-    instances = _ls(tags, 'running', first_n, last_n)
+    @_retry
+    def f():
+        x = _ls(tags, 'running', first_n, last_n)
+        assert x, 'didnt find any instances'
+        return x
+    instances = f()
     if os.path.exists(cmd):
         with open(cmd) as f:
             cmd = f.read()
@@ -417,17 +422,14 @@ def _ls_by_ids(*ids):
 def _wait_until(state, *instances):
     assert state in ['running', 'stopped']
     ids = [getattr(i, 'instance_id', i) for i in instances]
-    _client().get_waiter('instance_' + state).wait(InstanceIds=ids)
-    # because waiter exits before ls return currect results sometimes.
-    for i in range(10):
+    for i in range(60):
         try:
             new_instances = _ls(ids, state=state)
             assert len(instances) == len(new_instances), '%s != %s' % (len(instances), (new_instances))
             return new_instances
         except:
-            if i == 9:
-                raise
-            time.sleep(i + random.random())
+            time.sleep(10 + 5 * random.random())
+    assert False, 'failed to wait for %(state)s for instances %(ids)s' % locals()
 
 
 def _wait_for_ssh(*instances):
@@ -441,7 +443,7 @@ def _wait_for_ssh(*instances):
             ssh(*[i.instance_id for i in instances], cmd='whoami > /dev/null', yes=True, quiet=True, timeout=timeout)
             for i in instances:
                 i.reload()
-            assert len(ip(*[i.instance_id for i in instances])) == len(instances) # eventual consistency is the best, you'd think the waiter would have covered this
+            assert len(ip(*[i.instance_id for i in instances])) == len(instances) # eventual consistency is the best
             return [i.public_dns_name for i in instances]
         except:
             time.sleep(max(0, timeout - (time.time() - start)))
@@ -667,6 +669,7 @@ def _create_spot_instances(**opts):
             # with bad params or something, otherwise hangs forever
             # poll instead of waiter?
             # _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)
+            # TODO waiters are awful. remove this.
             _client().get_waiter('spot_instance_request_fulfilled').wait(SpotInstanceRequestIds=request_ids)
             break
         except botocore.exceptions.WaiterError: # fails when spot-request-id does not exist (yet)
@@ -835,6 +838,7 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
     if not no_wait:
         logging.info('wait for image...')
         # TODO this appears to wait way longer than necessary. instead, wait until ami-id appears in amis(name)
+        # TODO these waiters are useless. remove.
         _client().get_waiter('image_available').wait(ImageIds=[ami_id])
     return ami_id
 

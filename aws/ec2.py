@@ -649,7 +649,10 @@ def vpcs():
 def _subnet(vpc, zone):
     vpcs = list(_resource().vpcs.filter(Filters=[{'Name': 'tag:Name', 'Values': [vpc]}]))
     assert len(vpcs) == 1, 'no vpc named: %s' % vpc
-    subnets = [x for x in vpcs[0].subnets.all() if x.availability_zone == zone]
+    if zone:
+        subnets = [x for x in vpcs[0].subnets.all() if x.availability_zone == zone]
+    else:
+        subnets = list(vpcs[0].subnets.all())[:1]
     assert len(subnets) == 1, 'no subnet for vpc=%(vpc)s zone=%(zone)s' % locals()
     return subnets[0].id
 
@@ -744,7 +747,7 @@ def new(name:  'name of the instance',
     if zone:
         opts['Placement'] = {'AvailabilityZone': zone}
     if vpc:
-        opts['SubnetId'] = _subnet(vpc)
+        opts['SubnetId'] = _subnet(vpc, zone)
     if spot:
         spot_opts = _make_spot_opts(spot, **opts)
         logging.info('request spot instances:\n' + pprint.pformat(util.dicts.drop_in(spot_opts, ['LaunchSpecification', 'UserData'])))

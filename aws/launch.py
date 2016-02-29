@@ -68,6 +68,7 @@ def new(name:    'name of all instances',
         sg:      'security group name'         = shell.conf.get_or_prompt_pref('sg',   aws.ec2.__file__, message='security group name'),
         type:    'instance type'               = shell.conf.get_or_prompt_pref('type', aws.ec2.__file__, message='instance type'),
         vpc:     'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  aws.ec2.__file__, message='vpc name'),
+        zone:    'ec2 availability zone'       = None,
         gigs:    'gb capacity of primary disk' = 8):
     tags, args, labels = tuple(tag or ()), tuple(arg or ()), tuple(label or ())
     args = [str(a) for a in args]
@@ -117,6 +118,7 @@ def new(name:    'name of all instances',
                                sg=sg,
                                type=type,
                                vpc=vpc,
+                               zone=zone,
                                gigs=gigs,
                                num=len(args))
     errors = []

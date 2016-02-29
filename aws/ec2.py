@@ -11,6 +11,7 @@ import random
 import re
 import shell
 import shell.conf
+import statistics
 import subprocess
 import sys
 import time
@@ -645,11 +646,11 @@ def vpcs():
         logging.info('%s subnets: %s', _name(vpc), ' '.join([x.id for x in vpc.subnets.all()]))
 
 
-def _subnet(vpc):
+def _subnet(vpc, zone):
     vpcs = list(_resource().vpcs.filter(Filters=[{'Name': 'tag:Name', 'Values': [vpc]}]))
-    assert len(vpcs) == 1, vpcs
-    subnets = list(vpcs[0].subnets.all())
-    assert len(subnets) == 1, subnets
+    assert len(vpcs) == 1, 'no vpc named: %s' % vpc
+    subnets = [x for x in vpcs[0].subnets.all() if x.availability_zone == zone]
+    assert len(subnets) == 1, 'no subnet for vpc=%(vpc)s zone=%(zone)s' % locals()
     return subnets[0].id
 
 
@@ -686,7 +687,7 @@ def _make_spot_opts(spot, **opts):
     spot_opts = {}
     spot_opts['SpotPrice'] = str(float(spot))
     spot_opts['InstanceCount'] = opts['MaxCount']
-    specs = ['ImageId', 'KeyName', 'SecurityGroupIds', 'UserData', 'BlockDeviceMappings', 'SubnetId', 'InstanceType']
+    specs = ['ImageId', 'KeyName', 'SecurityGroupIds', 'UserData', 'BlockDeviceMappings', 'SubnetId', 'InstanceType', 'Placement']
     spot_opts['LaunchSpecification'] = specs = util.dicts.take(opts, specs)
     spot_opts = util.dicts.update_in(spot_opts, ['LaunchSpecification', 'UserData'], util.strings.b64_encode)
     return spot_opts
@@ -699,6 +700,7 @@ def new(name:  'name of the instance',
         sg:    'security group name'         = shell.conf.get_or_prompt_pref('sg',   __file__, message='security group name'),
         type:  'instance type'               = shell.conf.get_or_prompt_pref('type', __file__, message='instance type'),
         vpc:   'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  __file__, message='vpc name'),
+        zone:  'ec2 availability zone'       = None,
         gigs:  'gb capacity of primary disk' = 8,
         init:  'cloud init command'          = 'date > /tmp/cloudinit.log',
         data:  'arbitrary user-data'         = None,
@@ -737,6 +739,10 @@ def new(name:  'name of the instance',
     opts['SecurityGroupIds'] = [x.id for x in _sgs(names=[sg])]
     opts['InstanceType'] = type
     opts['BlockDeviceMappings'] = _blocks(gigs)
+    if spot and zone is None:
+        zone = cheapest_zone(type)
+    if zone:
+        opts['Placement'] = {'AvailabilityZone': zone}
     if vpc:
         opts['SubnetId'] = _subnet(vpc)
     if spot:
@@ -779,16 +785,28 @@ def _zones():
     return [x['ZoneName'] for x in _client().describe_availability_zones()['AvailabilityZones']]
 
 
-def spot_price(type, region='us-east-1a', slice=20):
+def spot_price(type, slice=40):
     prices = [_client().describe_spot_price_history(InstanceTypes=[type], AvailabilityZone=zone)['SpotPriceHistory'][:slice] for zone in _zones()]
     prices = list(zip(*prices))
-    val = ''
-    val += ' '.join(('type', 'time', ' '.join([p['AvailabilityZone'] for p in prices[0]]))) + '\n'
-    for pp in prices:
-        val += ' '.join((type,
-                         str(pp[0]['Timestamp']).split('+')[0].replace(' ', 'T')[:-3],
-                         ' '.join(['%.3f' % float(p['SpotPrice']) for p in pp]))) + '\n'
-    print(util.strings.align(val))
+    return [' '.join(x)
+            for x in [('type', 'time', ' '.join([p['AvailabilityZone'] for p in prices[0]]))] +
+                     [(type,
+                       str(pp[0]['Timestamp']).split('+')[0].replace(' ', 'T')[:-3],
+                       ' '.join(['%.3f' % float(p['SpotPrice']) for p in pp]))
+                      for pp in prices] +
+                     [['-', 'mean:'] + ['%.3f' % statistics.mean(x)
+                                        for x in zip(*[[float(p['SpotPrice'])
+                                                        for p in pp]
+                                                       for pp in prices])]]]
+
+
+def cheapest_zone(type, slice=40):
+    res = spot_price(type, slice)
+    zones = res[0].split()[2:]
+    means = [float(x) for x in res[-1].split()[2:]]
+    zone, price = sorted(zip(zones, means), key=lambda x: x[1])[0]
+    logging.info('price: %s', price)
+    return zone
 
 
 def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):

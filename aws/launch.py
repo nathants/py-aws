@@ -1,5 +1,4 @@
 import aws.ec2
-import pprint
 import pager
 import re
 import os
@@ -109,62 +108,69 @@ def new(name:    'name of all instances',
                        'type': type,
                        'vpc': vpc,
                        'gigs': gigs})
-    user = shell.run('whoami')
-    shell.run('aws s3 cp - s3://%(bucket)s/ec2_logs/%(user)s/launch=%(launch_id)s.json' % locals(), stdin=data)
-    instance_ids = aws.ec2.new(name,
-                               spot=spot,
-                               key=key,
-                               ami=ami,
-                               sg=sg,
-                               type=type,
-                               vpc=vpc,
-                               zone=zone,
-                               gigs=gigs,
-                               num=len(args))
-    errors = []
-    tags += ('launch=%s' % launch_id,)
-    def run_cmd(instance_id, arg, label):
-        def fn():
-            try:
-                if pre_cmd:
-                    aws.ec2.ssh(instance_id, yes=True, cmd=pre_cmd % {'arg': arg}, prefixed=True)
-                aws.ec2.ssh(instance_id, no_tty=True, yes=True, cmd=_cmd(arg, cmd, no_rm, bucket), prefixed=True)
-                instance = aws.ec2._ls([instance_id])[0]
-                aws.ec2._retry(instance.create_tags)(Tags=[{'Key': k, 'Value': v}
-                                                           for tag in tags + ('label=%s' % label,)
-                                                           for [k, v] in [tag.split('=', 1)]])
-                logging.info('tagged: %s', aws.ec2._pretty(instance))
-                logging.info('ran cmd against %s for label %s', instance_id, label)
-            except:
-                errors.append(traceback.format_exc())
-        return fn
-    pool.thread.wait(*map(run_cmd, instance_ids, args, labels))
-    try:
-        if errors:
-            logging.info(util.colors.red('errors:'))
-            for e in errors:
-                logging.info(e)
-            sys.exit(1)
-    finally:
-        return 'launch=%s' % launch_id
+    if 'AWS_LAUNCH_RUN_LOCAL' in os.environ:
+        for arg in args:
+            with shell.tempdir(), shell.set_stream():
+                shell.run(pre_cmd % {'arg': arg})
+                shell.run(cmd % {'arg': arg})
+    else:
+        user = shell.run('whoami')
+        shell.run('aws s3 cp - s3://%(bucket)s/ec2_logs/%(user)s/launch=%(launch_id)s.json' % locals(), stdin=data)
+        instance_ids = aws.ec2.new(name,
+                                   spot=spot,
+                                   key=key,
+                                   ami=ami,
+                                   sg=sg,
+                                   type=type,
+                                   vpc=vpc,
+                                   zone=zone,
+                                   gigs=gigs,
+                                   num=len(args))
+        errors = []
+        tags += ('launch=%s' % launch_id,)
+        def run_cmd(instance_id, arg, label):
+            def fn():
+                try:
+                    if pre_cmd:
+                        aws.ec2.ssh(instance_id, yes=True, cmd=pre_cmd % {'arg': arg}, prefixed=True)
+                    aws.ec2.ssh(instance_id, no_tty=True, yes=True, cmd=_cmd(arg, cmd, no_rm, bucket), prefixed=True)
+                    instance = aws.ec2._ls([instance_id])[0]
+                    aws.ec2._retry(instance.create_tags)(Tags=[{'Key': k, 'Value': v}
+                                                               for tag in tags + ('label=%s' % label,)
+                                                               for [k, v] in [tag.split('=', 1)]])
+                    logging.info('tagged: %s', aws.ec2._pretty(instance))
+                    logging.info('ran cmd against %s for label %s', instance_id, label)
+                except:
+                    errors.append(traceback.format_exc())
+            return fn
+        pool.thread.wait(*map(run_cmd, instance_ids, args, labels))
+        try:
+            if errors:
+                logging.info(util.colors.red('errors:'))
+                for e in errors:
+                    logging.info(e)
+                sys.exit(1)
+        finally:
+            return 'launch=%s' % launch_id
 
 
 def wait(*tags):
     """
     wait for all args to finish, and exit 0 only if all logged "exited 0".
     """
-    logging.info('wait for launch: %s', ' '.join(tags))
-    while True:
-        instances = aws.ec2._ls(tags, state=['running', 'pending'])
-        logging.info('%s num running: %s', str(datetime.datetime.utcnow()).replace(' ', 'T').split('.')[0], len(instances))
-        if not instances:
-            break
-        time.sleep(5 + 10 * random.random())
-    vals = status(*tags)
-    logging.info('\n'.join(vals))
-    for v in vals:
-        if not v.startswith('done'):
-            sys.exit(1)
+    if 'AWS_LAUNCH_RUN_LOCAL' not in os.environ:
+        logging.info('wait for launch: %s', ' '.join(tags))
+        while True:
+            instances = aws.ec2._ls(tags, state=['running', 'pending'])
+            logging.info('%s num running: %s', str(datetime.datetime.utcnow()).replace(' ', 'T').split('.')[0], len(instances))
+            if not instances:
+                break
+            time.sleep(5 + 10 * random.random())
+        vals = status(*tags)
+        logging.info('\n'.join(vals))
+        for v in vals:
+            if not v.startswith('done'):
+                sys.exit(1)
 
 
 def from_params(params_path):

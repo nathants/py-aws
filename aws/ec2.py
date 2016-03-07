@@ -205,6 +205,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
                     try:
                         shell.run(*make_ssh_cmd(instance),
                                   callback=_make_callback(instance, quiet),
+                                  echo=False,
                                   raw_cmd=True,
                                   stream=False,
                                   hide_stderr=quiet)
@@ -803,7 +804,7 @@ def spot_price(type, slice=40):
                                                        for pp in prices])]]]
 
 
-def cheapest_zone(type, slice=40):
+def cheapest_zone(type, slice=1000):
     res = spot_price(type, slice)
     zones = res[0].split()[2:]
     means = [float(x) for x in res[-1].split()[2:]]

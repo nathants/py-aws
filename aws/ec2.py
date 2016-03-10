@@ -605,9 +605,7 @@ def revoke(ip, *names, yes=False):
             except Exception as e:
                 logging.info('%s: %s %s %s', re.sub(r'.*\((.*)\).*', r'\1', str(e)), sg.group_name, sg.group_id, proto)
 
-
-def amis(*name_fragments):
-    name_fragments = name_fragments
+def amis_fuzzy(*name_fragments):
     amis = _resource().images.filter(Owners=['self'],
                                      Filters=[{'Name': 'name',
                                                'Values': ['*%s*' % '*'.join(name_fragments)]},
@@ -616,6 +614,19 @@ def amis(*name_fragments):
     amis = sorted(amis, key=lambda x: x.creation_date, reverse=True)
     for ami in amis:
         print('%s %s' % (util.colors.green(ami.image_id), ami.name))
+
+
+def amis(name):
+    amis = _resource().images.filter(Owners=['self'],
+                                     Filters=[{'Name': 'name',
+                                               'Values': ['*%s*' % name]},
+                                              {'Name': 'state',
+                                               'Values': ['available']}])
+    amis = [x for x in amis
+            if x.name.split('__')[0] == name]
+    amis = sorted(amis, key=lambda x: x.creation_date, reverse=True)
+    for ami in amis:
+        print(' '.join([util.colors.green(ami.image_id)] + ami.name.split('__')))
 
 
 ubuntus = {'trusty': 'ubuntu/images/hvm/ubuntu-trusty-14.04-amd64-server',
@@ -841,10 +852,11 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):
 
 def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, description=None, no_append_date=False):
     assert name, 'you must provide a name'
+    assert '__' not in name, 'you cannot use "__" in a name'
     if not description:
         description = name
     if not no_append_date:
-        name += '-' + str(datetime.datetime.utcnow()).replace(' ', 'T').split('.')[0].replace(':', '-') + 'Z'
+        name += '__' + str(datetime.datetime.utcnow()).replace(' ', 'T').split('.')[0].replace(':', '-') + 'Z'
     assert tags, 'you must specify some tags'
     instances = _ls(tags, ['running', 'stopped'], first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly one instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')

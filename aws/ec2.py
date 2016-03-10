@@ -424,7 +424,7 @@ def _ls_by_ids(*ids):
 def _wait_until(state, *instances):
     assert state in ['running', 'stopped']
     ids = [getattr(i, 'instance_id', i) for i in instances]
-    for i in range(60):
+    for i in range(120):
         try:
             new_instances = _ls(ids, state=state)
             assert len(instances) == len(new_instances), '%s != %s' % (len(instances), (new_instances))

@@ -46,7 +46,7 @@ def _cmd(arg, cmd, no_rm, bucket):
     shutdown = ('sudo halt'
                 if no_rm else
                 'aws ec2 terminate-instances --instance-ids $(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)')
-    return "(echo %(_cmd)s; %(_cmd)s; echo exited $?; %(upload_log)s; %(upload_log_tail)s; %(shutdown)s) >nohup.out 2>nohup.out </dev/null &" % locals()
+    return "(echo %(_cmd)s; %(_cmd)s; echo exited $?; %(upload_log)s; %(upload_log_tail)s; %(shutdown)s) >nohup.out 2>&1 </dev/null &" % locals()
 
 
 @argh.arg('--tag', action='append')
@@ -60,7 +60,6 @@ def new(name:    'name of all instances',
         tag:     'tag to set as "<key>=<value>' = None,
         no_rm:   'stop instance instead of terminating when done' = False,
         bucket:  's3 bucket to upload logs to' = shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
-        # following opts are copied verbatim from ec2.new
         spot:    'spot price to bid'           = None,
         key:     'key pair name'               = shell.conf.get_or_prompt_pref('key',  aws.ec2.__file__, message='key pair name'),
         ami:     'ami id'                      = shell.conf.get_or_prompt_pref('ami',  aws.ec2.__file__, message='ami id'),
@@ -69,6 +68,9 @@ def new(name:    'name of all instances',
         vpc:     'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  aws.ec2.__file__, message='vpc name'),
         zone:    'ec2 availability zone'       = None,
         gigs:    'gb capacity of primary disk' = 8):
+    optional = ['no_rm', 'zone', 'spot', 'tag', 'pre_cmd', 'label']
+    for key, value in locals().items():
+        assert value is not None or key in optional, 'required flag missing: --' + key.replace('_', '-')
     tags, args, labels = tuple(tag or ()), tuple(arg or ()), tuple(label or ())
     args = [str(a) for a in args]
     if labels:
@@ -291,7 +293,7 @@ def ls_logs(owner=None,
             for date, tags in keys]
     keys = [key for key in keys if 'launch' in key['tags']]
     keys = util.iter.groupby(keys, lambda x: x['tags']['launch'])
-    keys = sorted(keys, key=lambda x: x[1][0]['date']) # TODO date should be identical for all launchees, currently is distinct.
+    keys = sorted(keys, key=lambda x: x[1][0]['date'])
     for launch, xs in keys:
         print(xs[0]['tags']['Name'],
               'launch=' + launch,

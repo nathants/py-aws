@@ -17,6 +17,7 @@ import uuid
 import util.colors
 import util.iter
 import util.log
+from util.iter import chunk
 from unittest import mock
 
 
@@ -118,42 +119,41 @@ def new(name:    'name of all instances',
     else:
         user = shell.run('whoami')
         shell.run('aws s3 cp - s3://%(bucket)s/ec2_logs/%(user)s/launch=%(launch_id)s.json' % locals(), stdin=data)
-        instance_ids = aws.ec2.new(name,
-                                   spot=spot,
-                                   key=key,
-                                   ami=ami,
-                                   sg=sg,
-                                   type=type,
-                                   vpc=vpc,
-                                   zone=zone,
-                                   gigs=gigs,
-                                   num=len(args))
-        errors = []
         tags += ('launch=%s' % launch_id,)
-        def run_cmd(instance_id, arg, label):
-            def fn():
-                try:
-                    if pre_cmd:
-                        aws.ec2.ssh(instance_id, yes=True, cmd=pre_cmd % {'arg': arg}, prefixed=True)
-                    aws.ec2.ssh(instance_id, no_tty=True, yes=True, cmd=_cmd(arg, cmd, no_rm, bucket), prefixed=True)
-                    instance = aws.ec2._ls([instance_id])[0]
-                    aws.ec2._retry(instance.create_tags)(Tags=[{'Key': k, 'Value': v}
-                                                               for tag in tags + ('label=%s' % label,)
-                                                               for [k, v] in [tag.split('=', 1)]])
-                    logging.info('tagged: %s', aws.ec2._pretty(instance))
-                    logging.info('ran cmd against %s for label %s', instance_id, label)
-                except:
-                    errors.append(traceback.format_exc())
-            return fn
-        pool.thread.wait(*map(run_cmd, instance_ids, args, labels))
-        try:
+        for i, (args_chunk, labels_chunk) in enumerate(zip(chunk(args, 50), chunk(labels, 50))):
+            instance_ids = aws.ec2.new(name,
+                                       spot=spot,
+                                       key=key,
+                                       ami=ami,
+                                       sg=sg,
+                                       type=type,
+                                       vpc=vpc,
+                                       zone=zone,
+                                       gigs=gigs,
+                                       num=len(args_chunk))
+            errors = []
+            def run_cmd(instance_id, arg, label):
+                def fn():
+                    try:
+                        if pre_cmd:
+                            aws.ec2.ssh(instance_id, yes=True, cmd=pre_cmd % {'arg': arg}, prefixed=True)
+                        aws.ec2.ssh(instance_id, no_tty=True, yes=True, cmd=_cmd(arg, cmd, no_rm, bucket), prefixed=True)
+                        instance = aws.ec2._ls([instance_id])[0]
+                        aws.ec2._retry(instance.create_tags)(Tags=[{'Key': k, 'Value': v}
+                                                                   for tag in tags + ('label=%s' % label, 'chunk=%s' % i)
+                                                                   for [k, v] in [tag.split('=', 1)]])
+                        logging.info('tagged: %s', aws.ec2._pretty(instance))
+                        logging.info('ran cmd against %s for label %s', instance_id, label)
+                    except:
+                        errors.append(traceback.format_exc())
+                return fn
+            pool.thread.wait(*map(run_cmd, instance_ids, args_chunk, labels_chunk))
             if errors:
                 logging.info(util.colors.red('errors:'))
                 for e in errors:
                     logging.info(e)
                 sys.exit(1)
-        finally:
-            return 'launch=%s' % launch_id
+        return 'launch=%s' % launch_id
 
 
 def wait(*tags):

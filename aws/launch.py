@@ -69,8 +69,8 @@ def new(name:    'name of all instances',
         zone:    'ec2 availability zone'       = None,
         gigs:    'gb capacity of primary disk' = 8):
     optional = ['no_rm', 'zone', 'spot', 'tag', 'pre_cmd', 'label']
-    for key, value in locals().items():
-        assert value is not None or key in optional, 'required flag missing: --' + key.replace('_', '-')
+    for k, v in locals().items():
+        assert v is not None or k in optional, 'required flag missing: --' + k.replace('_', '-')
     tags, args, labels = tuple(tag or ()), tuple(arg or ()), tuple(label or ())
     args = [str(a) for a in args]
     if labels:

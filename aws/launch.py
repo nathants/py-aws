@@ -60,6 +60,7 @@ def new(name:    'name of all instances',
         cmd:     'cmd which is run in the background' = None,
         tag:     'tag to set as "<key>=<value>' = None,
         no_rm:   'stop instance instead of terminating when done' = False,
+        chunk_size: 'how many args to launch at once' = 50,
         bucket:  's3 bucket to upload logs to' = shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
         spot:    'spot price to bid'           = None,
         key:     'key pair name'               = shell.conf.get_or_prompt_pref('key',  aws.ec2.__file__, message='key pair name'),
@@ -120,7 +121,8 @@ def new(name:    'name of all instances',
         user = shell.run('whoami')
         shell.run('aws s3 cp - s3://%(bucket)s/ec2_logs/%(user)s/launch=%(launch_id)s.json' % locals(), stdin=data)
         tags += ('launch=%s' % launch_id,)
-        for i, (args_chunk, labels_chunk) in enumerate(zip(chunk(args, 50), chunk(labels, 50))):
+        for i, (args_chunk, labels_chunk) in enumerate(zip(chunk(args, chunk_size), chunk(labels, chunk_size))):
+            logging.info('launching chunk %s of %s, chunk size: %s', i + 1, len(args) // chunk_size + 1, chunk_size)
             instance_ids = aws.ec2.new(name,
                                        spot=spot,
                                        key=key,

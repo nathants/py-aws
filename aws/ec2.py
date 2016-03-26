@@ -424,7 +424,7 @@ def _ls_by_ids(*ids):
 def _wait_until(state, *instances):
     assert state in ['running', 'stopped']
     ids = [getattr(i, 'instance_id', i) for i in instances]
-    for i in range(120):
+    for i in range(300):
         try:
             new_instances = _ls(ids, state=state)
             assert len(instances) == len(new_instances), '%s != %s' % (len(instances), (new_instances))
@@ -435,19 +435,16 @@ def _wait_until(state, *instances):
 
 
 def _wait_for_ssh(*instances):
-    logging.info('wait for state=running...')
-    _wait_until('running', *instances)
     logging.info('wait for ssh...')
-    # TODO 15 minutes is a long time. reduce this after we have better
+    # TODO 20 minutes is a long time. reduce this after we have better
     # retry logic for ssh-wait and spot-wait failing?
-    for _ in range(300):
+    for _ in range(400):
+        instances = _ls([i.id for i in instances], state='all') # reload instances
         timeout = 3 + random.random()
         start = time.time()
         try:
+            assert len(_ls([i.id for i in instances], state='running')) == len(instances)
             ssh(*[i.instance_id for i in instances], cmd='whoami > /dev/null', yes=True, quiet=True, timeout=timeout)
-            for i in instances:
-                i.reload()
-            assert len(ip(*[i.instance_id for i in instances])) == len(instances) # eventual consistency is the best
             return [i.public_dns_name for i in instances]
         except:
             time.sleep(max(0, timeout - (time.time() - start)))
@@ -696,8 +693,8 @@ def _create_spot_instances(**opts):
         raise AssertionError('failed to wait for spot requests')
     instance_ids = [x['InstanceId'] for x in _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)['SpotInstanceRequests']]
     logging.info('request fulfilled with instance-ids:\n%s', '\n'.join(instance_ids))
-    logging.info('wait for instances...')
-    return _wait_until('running', *instance_ids)
+    instances = _ls(instance_ids, state='all')
+    return instances
 
 
 def _make_spot_opts(spot, **opts):
@@ -762,15 +759,29 @@ def new(name:  'name of the instance',
         opts['Placement'] = {'AvailabilityZone': zone}
     if vpc:
         opts['SubnetId'] = _subnet(vpc, zone)
-    if spot:
-        spot_opts = _make_spot_opts(spot, **opts)
-        logging.info('request spot instances:\n' + pprint.pformat(util.dicts.drop_in(spot_opts, ['LaunchSpecification', 'UserData'])))
-        instances = _create_spot_instances(**spot_opts)
+
+    # TODO do a more surgical retry. dont rm all and start over. keep
+    # the good ones, and start over for only as many new ones as we
+    # need to fulfill the originally requested number.
+    for _ in range(5):
+        if spot:
+            spot_opts = _make_spot_opts(spot, **opts)
+            logging.info('request spot instances:\n' + pprint.pformat(util.dicts.drop_in(spot_opts, ['LaunchSpecification', 'UserData'])))
+            # TODO improve the wait-for-spot-fullfillment logic inside _create_spot_instances()
+            # TODO currently this can error, which is not so good. compared to _resource().create_instances().
+            instances = _create_spot_instances(**spot_opts)
+        else:
+            logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
+            instances = _resource().create_instances(**opts)
+        try:
+            _wait_for_ssh(*instances)
+            break
+        except:
+            rm(*[i.instance_id for i in instances], yes=True)
+            logging.exception('failed to spinup and then wait for ssh on instances, retrying...')
     else:
-        logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
-        # TODO when spot request fails to wait, try again, or
-        # surgically spin up only those that failed to come up?
-        instances = _resource().create_instances(**opts)
+        assert False, 'failed to spinup and then wait for ssh on instances after 5 tries. aborting.'
+
     logging.info('instances: %s', [i.instance_id for i in instances])
     date = str(datetime.datetime.now()).replace(' ', 'T')
     for n, i in enumerate(instances):
@@ -785,10 +796,6 @@ def new(name:  'name of the instance',
             set_tags.append({'Key': k, 'Value': v})
         _retry(i.create_tags)(Tags=set_tags)
         logging.info('tagged: %s', _pretty(i))
-    # TODO when ssh wait fails, kill instances and try again, or
-    # surgically spin up only as many instances as failed the ssh
-    # check?
-    _wait_for_ssh(*instances)
     if login:
         logging.info('logging in...')
         ssh(instances[0].instance_id, yes=True, quiet=True)

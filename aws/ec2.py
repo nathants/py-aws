@@ -438,7 +438,9 @@ def _wait_for_ssh(*instances):
     logging.info('wait for state=running...')
     _wait_until('running', *instances)
     logging.info('wait for ssh...')
-    for _ in range(120):
+    # TODO 15 minutes is a long time. reduce this after we have better
+    # retry logic for ssh-wait and spot-wait failing?
+    for _ in range(300):
         timeout = 3 + random.random()
         start = time.time()
         try:
@@ -766,6 +768,8 @@ def new(name:  'name of the instance',
         instances = _create_spot_instances(**spot_opts)
     else:
         logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
+        # TODO when spot request fails to wait, try again, or
+        # surgically spin up only those that failed to come up?
         instances = _resource().create_instances(**opts)
     logging.info('instances: %s', [i.instance_id for i in instances])
     date = str(datetime.datetime.now()).replace(' ', 'T')
@@ -781,6 +785,9 @@ def new(name:  'name of the instance',
             set_tags.append({'Key': k, 'Value': v})
         _retry(i.create_tags)(Tags=set_tags)
         logging.info('tagged: %s', _pretty(i))
+    # TODO when ssh wait fails, kill instances and try again, or
+    # surgically spin up only as many instances as failed the ssh
+    # check?
     _wait_for_ssh(*instances)
     if login:
         logging.info('logging in...')

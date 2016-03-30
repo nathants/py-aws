@@ -38,10 +38,9 @@ def _tagify(old):
 def _cmd(arg, cmd, no_rm, bucket):
     _cmd = cmd % {'arg': arg}
     kw = {'bucket': bucket,
-          'user': shell.run('whoami'),
           'date': shell.run('date -u +%Y-%m-%dT%H:%M:%SZ'),
           'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s".replace(",", "-") % x for x in json.load(sys.stdin)["Tags"]]).replace("/", "-").replace(" ", "-").replace("_", "-"))\')'} # noqa
-    path = 's3://%(bucket)s/ec2_logs/%(user)s/%(date)s_%(tags)s' % kw
+    path = 's3://%(bucket)s/ec2_logs/%(date)s_%(tags)s' % kw
     upload_log = 'aws s3 cp ~/nohup.out %(path)s/nohup.out >/dev/null 2>&1' % locals()
     upload_log_tail = 'tail -n 1000 ~/nohup.out > ~/nohup.out.tail; aws s3 cp ~/nohup.out.tail %(path)s/nohup.out.tail >/dev/null 2>&1' % locals()
     shutdown = ('sudo halt'
@@ -118,8 +117,7 @@ def new(name:    'name of all instances',
                 shell.run(pre_cmd % {'arg': arg})
                 shell.run(cmd % {'arg': arg})
     else:
-        user = shell.run('whoami')
-        shell.run('aws s3 cp - s3://%(bucket)s/ec2_logs/%(user)s/launch=%(launch_id)s.json' % locals(), stdin=data)
+        shell.run('aws s3 cp - s3://%(bucket)s/ec2_logs/launch=%(launch_id)s.json' % locals(), stdin=data)
         tags += ('launch=%s' % launch_id,)
         for i, (args_chunk, labels_chunk) in enumerate(zip(chunk(args, chunk_size), chunk(labels, chunk_size))):
             logging.info('launching chunk %s of %s, chunk size: %s', i + 1, len(args) // chunk_size + 1, chunk_size)
@@ -238,8 +236,7 @@ def restart(*tags, cmd=None, yes=False, only_failed=False):
 def params(*tags,
            bucket: 's3 bucket to upload logs to' = shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
     launch_id = [x for x in tags if x.startswith('launch=')][0].split('launch=', 1)[-1]
-    user = shell.run('whoami')
-    return json.dumps(json.loads(shell.run('aws s3 cp s3://%(bucket)s/ec2_logs/%(user)s/launch=%(launch_id)s.json -' % locals())), indent=4)
+    return json.dumps(json.loads(shell.run('aws s3 cp s3://%(bucket)s/ec2_logs/launch=%(launch_id)s.json -' % locals())), indent=4)
 
 
 def status(*tags):
@@ -265,11 +262,9 @@ def status(*tags):
     return sorted(vals, key=lambda x: x.split()[0], reverse=True)
 
 
-def ls_params(owner=None,
-              bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
-    user = owner or shell.run('whoami') # noqa
+def ls_params(bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs')):
     vals = ['%(date)sT%(time)s %(name)s' % locals()
-            for x in shell.run('aws s3 ls s3://%(bucket)s/ec2_logs/%(user)s/' % locals()).splitlines()
+            for x in shell.run('aws s3 ls s3://%(bucket)s/ec2_logs/' % locals()).splitlines()
             for name in [x.split()[-1]]
             if name.startswith('launch=') and name.endswith('.json')
             for date, time, _, _ in [x.split()]
@@ -277,11 +272,9 @@ def ls_params(owner=None,
     return sorted(vals, reverse=True)
 
 
-def ls_logs(owner=None,
-            bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
+def ls_logs(bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
             name_only=False):
-    owner = owner or shell.run('whoami')
-    prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
+    prefix = '%(bucket)s/ec2_logs/' % locals()
     keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
     keys = [key for key in keys if 'launch=' in key]
     keys = [key for key in keys if key.endswith('nohup.out')]
@@ -315,8 +308,7 @@ def log(*tags,
         bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
         tail_only=False):
     assert tags, 'you must provide some tags'
-    owner = shell.run('whoami')
-    prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
+    prefix = '%(bucket)s/ec2_logs/' % locals()
     keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
     keys = [key.split()[-1] for key in keys]
     keys = [key for key in keys if key.endswith('nohup.out.tail' if tail_only else 'nohup.out')]
@@ -331,8 +323,7 @@ def logs(*tags,
          bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, message='bucket for ec2_logs'),
          tail_only=False):
     assert tags, 'you must provide some tags'
-    owner = shell.run('whoami')
-    prefix = '%(bucket)s/ec2_logs/%(owner)s/' % locals()
+    prefix = '%(bucket)s/ec2_logs/' % locals()
     keys = shell.run("aws s3 ls %(prefix)s --recursive" % locals()).splitlines()
     keys = [key for key in keys if key.endswith('nohup.out.tail' if tail_only else 'nohup.out')]
     keys = [key.split()[-1] for key in keys]

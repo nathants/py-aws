@@ -725,6 +725,7 @@ def new(name:  'name of the instance',
         login: 'login into the instance'     = False):
     if spot:
         spot = float(spot)
+    num = int(num)
     assert not (spot and type.startswith('t2.')), 't2.* instances cant use spot pricing'
     if vpc.lower() == 'none':
         vpc = None

@@ -354,7 +354,7 @@ def _tar_script(src, name, echo_only=False):
     script = ('cd %(src)s\n'
               'src=$(pwd)\n'
               'cd $(dirname $src)\n'
-              "FILES=$(find -L $(basename $src) -type f %(name)s -o -type l %(name)s| grep -v '\.git')\n"
+              "FILES=$(find -L $(basename $src) -type f %(name)s -o -type l %(name)s)\n"
               'echo $FILES|tr " " "\\n" 1>&2\n'
               + ('' if echo_only else 'tar cfh - $FILES')) % locals()
     with shell.tempdir(cleanup=False):
@@ -774,6 +774,7 @@ def new(name:  'name of the instance',
         else:
             logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
             instances = _resource().create_instances(**opts)
+        logging.info('instances: %s', [i.instance_id for i in instances])
         try:
             _wait_for_ssh(*instances)
             break
@@ -782,8 +783,6 @@ def new(name:  'name of the instance',
             logging.exception('failed to spinup and then wait for ssh on instances, retrying...')
     else:
         assert False, 'failed to spinup and then wait for ssh on instances after 5 tries. aborting.'
-
-    logging.info('instances: %s', [i.instance_id for i in instances])
     date = str(datetime.datetime.now()).replace(' ', 'T')
     for n, i in enumerate(instances):
         set_tags = [{'Key': 'Name', 'Value': name},

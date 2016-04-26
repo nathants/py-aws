@@ -185,9 +185,9 @@ def from_params(params_path):
                **util.dicts.drop(data, ['name', 'args', 'labels', 'tags']))
 
 
-def restart(*tags, cmd=None, yes=False, only_failed=False):
+def retry(*tags, cmd=None, yes=False, everything=False):
     """
-    restart any arg which is not running and has not logged "exited 0".
+    retry any arg which is not running and has not logged "exited 0".
     """
     text = params(*tags)
     data = json.loads(text)
@@ -206,13 +206,13 @@ def restart(*tags, cmd=None, yes=False, only_failed=False):
         state, label = val.split()
         label = label.split('label=', 1)[-1]
         if state == 'failed':
-            logging.info('going to restart failed label=%s', label)
+            logging.info('going to retry failed label=%s', label)
             labels_to_restart.append(label)
         elif state == 'missing':
-            logging.info('going to restart missing label=%s', label)
+            logging.info('going to retry missing label=%s', label)
             labels_to_restart.append(label)
-        elif not only_failed:
-            logging.info('going to restart label=%s', label)
+        elif everything:
+            logging.info('going to retry label=%s', label)
             labels_to_restart.append(label)
     if labels_to_restart:
         if not yes:
@@ -230,7 +230,7 @@ def restart(*tags, cmd=None, yes=False, only_failed=False):
                    tag=data['tags'],
                    **util.dicts.drop(data, ['name', 'args', 'labels', 'tags']))
     else:
-        logging.info('nothing to restart')
+        logging.info('nothing to retry')
 
 
 def params(*tags,
@@ -288,7 +288,7 @@ def ls_logs(bucket=shell.conf.get_or_prompt_pref('ec2_logs_bucket',  __file__, m
             for date, tags in keys]
     keys = [key for key in keys if 'launch' in key['tags']]
     keys = util.iter.groupby(keys, lambda x: x['tags']['launch'])
-    keys = sorted(keys, key=lambda x: x[1][0]['date'])
+    keys = sorted(keys, key=lambda x: x[1][0]['date'], reverse=True)
     for launch, xs in keys:
         print(xs[0]['tags']['Name'],
               'launch=' + launch,

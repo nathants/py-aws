@@ -436,9 +436,7 @@ def _wait_until(state, *instances):
 
 def _wait_for_ssh(*instances):
     logging.info('wait for ssh...')
-    # TODO 20 minutes is a long time. reduce this after we have better
-    # retry logic for ssh-wait and spot-wait failing?
-    for _ in range(400):
+    for _ in range(75):
         instances = _ls([i.id for i in instances], state='all') # reload instances
         timeout = 3 + random.random()
         start = time.time()
@@ -628,8 +626,8 @@ def amis(name):
         print(' '.join([util.colors.green(ami.image_id)] + ami.name.split('__')))
 
 
-ubuntus = {'trusty': 'ubuntu/images/hvm/ubuntu-trusty-14.04-amd64-server',
-           'wily':   'ubuntu/images/hvm/ubuntu-wily-15.10-amd64-server'}
+ubuntus = {'xenial': 'ubuntu/images/hvm-ssd/ubuntu-xenial-16.04-amd64-server',
+           'trusty': 'ubuntu/images/hvm-ssd/ubuntu-trusty-14.04-amd64-server'}
 
 def amis_ubuntu(*name_fragments):
     name_fragments = ('ubuntu/images/',) + name_fragments
@@ -838,7 +836,7 @@ def cheapest_zone(type, slice=1000):
     return zone
 
 
-def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):
+def start(*tags, yes=False, first_n=None, last_n=None, login=False, wait=False):
     assert tags, 'you cannot start all things, specify some tags'
     instances = _ls(tags, 'stopped', first_n, last_n)
     assert instances, 'didnt find any stopped instances for those tags'
@@ -851,7 +849,7 @@ def start(*tags, yes=False, first_n=None, last_n=None, ssh=False, wait=False):
     for i in instances:
         i.start()
         logging.info('started: %s', _pretty(i))
-    if ssh:
+    if login:
         assert len(instances) == 1, util.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         instances[0].wait_until_running()
         try:

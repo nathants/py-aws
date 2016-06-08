@@ -147,7 +147,7 @@ def new(name:    'name of all instances',
                     except:
                         errors.append(traceback.format_exc())
                 return fn
-            pool.thread.wait(*map(run_cmd, instance_ids, args_chunk, labels_chunk))
+            pool.thread.wait(*map(run_cmd, instance_ids, args_chunk, labels_chunk), max_threads=10)
             if errors:
                 logging.info(util.colors.red('errors:'))
                 for e in errors:

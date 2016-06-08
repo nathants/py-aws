@@ -195,8 +195,8 @@ def retry(*tags, cmd=None, yes=False, everything=False):
         new_data = json.loads(shell.run(cmd, stdin=text))
         for k in data:
             if data[k] != new_data[k]:
-                logging.info('\nold: %s', {k: data[k]})
-                logging.info('new: %s', {k: new_data[k]})
+                logging.info('\nold: %s', json.dumps({k: data[k]}))
+                logging.info('new: %s', json.dumps({k: new_data[k]}))
         if not yes:
             logging.info('\nwould you like to proceed? y/n\n')
             assert pager.getch() == 'y', 'abort'

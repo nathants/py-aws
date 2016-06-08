@@ -73,21 +73,26 @@ def _ls(tags, state='running', first_n=None, last_n=None):
     is_instance_id = tags and re.search(r'i\-[a-zA-Z0-9]{8}', tags[0])
     if tags and not is_dns_name and not is_instance_id and '=' not in tags[0]:
         tags = ('Name=%s' % tags[0],) + tuple(tags[1:])
-    filters = [{'Name': 'instance-state-name', 'Values': state}] if state[0] != 'all' else []
-    if is_dns_name:
-        filters += [{'Name': 'dns-name', 'Values': tags}]
-        instances = _resource().instances.filter(Filters=filters)
-    elif is_instance_id:
-        filters += [{'Name': 'instance-id', 'Values': tags}]
-        instances = _resource().instances.filter(Filters=filters)
-    elif any('*' in tag for tag in tags):
-        instances = _resource().instances.filter(Filters=filters)
-        instances = [i for i in instances if _matches(i, tags)]
+    instances = []
+    if not tags:
+        filters = [{'Name': 'instance-state-name', 'Values': state}] if state[0] != 'all' else []
+        instances += list(_resource().instances.filter(Filters=filters))
     else:
-        filters += [{'Name': 'tag:%s' % name, 'Values': [value]}
-                    for tag in tags
-                    for name, value in [tag.split('=')]]
-        instances = _resource().instances.filter(Filters=filters)
+        for tags_chunk in util.iter.chunk(tags, 195): # 200 boto api limit
+            filters = [{'Name': 'instance-state-name', 'Values': state}] if state[0] != 'all' else []
+            if is_dns_name:
+                filters += [{'Name': 'dns-name', 'Values': tags_chunk}]
+                instances += list(_resource().instances.filter(Filters=filters))
+            elif is_instance_id:
+                filters += [{'Name': 'instance-id', 'Values': tags_chunk}]
+                instances += list(_resource().instances.filter(Filters=filters))
+            elif any('*' in tag for tag in tags_chunk):
+                instances += [i for i in _resource().instances.filter(Filters=filters) if _matches(i, tags_chunk)]
+            else:
+                filters += [{'Name': 'tag:%s' % name, 'Values': [value]}
+                            for tag in tags_chunk
+                            for name, value in [tag.split('=')]]
+                instances += list(_resource().instances.filter(Filters=filters))
     instances = sorted(instances, key=_name_group)
     instances = sorted(instances, key=lambda i: i.meta.data['LaunchTime'], reverse=True)
     if first_n:

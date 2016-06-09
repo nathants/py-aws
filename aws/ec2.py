@@ -441,7 +441,7 @@ def _wait_until(state, *instances):
 
 def _wait_for_ssh(*instances):
     logging.info('wait for ssh...')
-    for _ in range(75):
+    for _ in range(100):
         instances = _ls([i.id for i in instances], state='all') # reload instances
         timeout = 3 + random.random()
         start = time.time()

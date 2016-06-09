@@ -174,7 +174,7 @@ def _remote_cmd(cmd):
     return "mkdir -p ~/.cmds; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path; bash $path" % util.strings.b64_encode(cmd)
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=0, timeout=None, no_tty=False, user='ubuntu', key=None, echo=False, prefixed=False):
+def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=20, timeout=None, no_tty=False, user='ubuntu', key=None, echo=False, prefixed=False):
     """
     tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     """
@@ -442,15 +442,14 @@ def _wait_until(state, *instances):
 def _wait_for_ssh(*instances):
     logging.info('wait for ssh...')
     for _ in range(100):
-        instances = _ls([i.id for i in instances], state='all') # reload instances
-        timeout = 3 + random.random()
+        running = _ls([i.id for i in instances], state='running')
         start = time.time()
         try:
-            assert len(_ls([i.id for i in instances], state='running')) == len(instances)
-            ssh(*[i.instance_id for i in instances], cmd='whoami > /dev/null', yes=True, quiet=True, timeout=timeout)
+            assert len(running) == len(instances)
+            ssh(*[i.instance_id for i in running], cmd='whoami > /dev/null', yes=True, quiet=True, timeout=30)
             return [i.public_dns_name for i in instances]
         except:
-            time.sleep(max(0, timeout - (time.time() - start)))
+            time.sleep(max(0, 5 - (time.time() - start)))
     assert False, 'failed to wait for ssh'
 
 

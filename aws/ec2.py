@@ -174,7 +174,7 @@ def _remote_cmd(cmd):
     return "mkdir -p ~/.cmds; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path; bash $path" % util.strings.b64_encode(cmd)
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=None, timeout=None, no_tty=False, user='ubuntu', key=None, echo=False, prefixed=False):
+def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=0, timeout=None, no_tty=False, user='ubuntu', key=None, echo=False, prefixed=False):
     """
     tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     """
@@ -691,7 +691,7 @@ def _create_spot_instances(**opts):
             _client().get_waiter('spot_instance_request_fulfilled').wait(SpotInstanceRequestIds=request_ids)
             break
         except botocore.exceptions.WaiterError: # fails when spot-request-id does not exist (yet)
-            time.sleep(1 + random.random())
+            time.sleep(3 + random.random())
     else:
         raise AssertionError('failed to wait for spot requests')
     instance_ids = [x['InstanceId'] for x in _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)['SpotInstanceRequests']]

@@ -37,11 +37,11 @@ def _retry(f):
     retry and idempotent fn a few times
     """
     def fn(*a, **kw):
-        for i in range(4):
+        for i in itertools.count():
             try:
                 return f(*a, **kw)
             except:
-                if i == 3:
+                if i == 6:
                     raise
                 time.sleep(i + random.random())
     return fn
@@ -763,9 +763,15 @@ def new(name:  'name of the instance',
     if vpc:
         opts['SubnetId'] = _subnet(vpc, zone)
 
+    # TODO something like this, but a generator. when spinning up lots of
+    # instances, returns them as they become available, retrying failed
+    # ones and returning those later. excepts if is ultimately unable to
+    # spin up everybody.
+
     # TODO do a more surgical retry. dont rm all and start over. keep
     # the good ones, and start over for only as many new ones as we
     # need to fulfill the originally requested number.
+
     for _ in range(5):
         if spot:
             spot_opts = _make_spot_opts(spot, **opts)

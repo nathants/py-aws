@@ -34,6 +34,8 @@ def _tagify(old):
         logging.info("tagified label: '%s' -> '%s'", old, new)
     return new
 
+def _retry(cmd):
+    return 'max_tries=7; sleep_seconds=1; for i in $(seq 1 $max_tries); do %s && break || echo retrying; sleep $sleep_seconds; [ $i = $max_tries ] && echo all retries failed && exit 1 || true; done' % cmd
 
 def _cmd(arg, cmd, no_rm, bucket):
     _cmd = cmd % {'arg': arg}
@@ -41,11 +43,11 @@ def _cmd(arg, cmd, no_rm, bucket):
           'date': shell.run('date -u +%Y-%m-%dT%H:%M:%SZ'),
           'tags': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print(",".join(["%(Key)s=%(Value)s".replace(",", "-") % x for x in json.load(sys.stdin)["Tags"]]).replace("/", "-").replace(" ", "-").replace("_", "-"))\')'} # noqa
     path = 's3://%(bucket)s/ec2_logs/%(date)s_%(tags)s' % kw
-    upload_log = 'aws s3 cp ~/nohup.out %(path)s/nohup.out >/dev/null 2>&1' % locals()
-    upload_log_tail = 'tail -n 1000 ~/nohup.out > ~/nohup.out.tail; aws s3 cp ~/nohup.out.tail %(path)s/nohup.out.tail >/dev/null 2>&1' % locals()
+    upload_log = _retry('aws s3 cp ~/nohup.out %(path)s/nohup.out >/dev/null 2>&1' % locals())
+    upload_log_tail = _retry('tail -n 1000 ~/nohup.out > ~/nohup.out.tail; aws s3 cp ~/nohup.out.tail %(path)s/nohup.out.tail >/dev/null 2>&1' % locals())
     shutdown = ('sudo halt'
                 if no_rm else
-                'aws ec2 terminate-instances --instance-ids $(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)')
+                _retry('aws ec2 terminate-instances --instance-ids $(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)'))
     return "(echo %(_cmd)s; %(_cmd)s; echo exited $?; %(upload_log)s; %(upload_log_tail)s; %(shutdown)s) >nohup.out 2>&1 </dev/null &" % locals()
 
 
@@ -55,7 +57,7 @@ def _cmd(arg, cmd, no_rm, bucket):
 def new(name:    'name of all instances',
         arg:     'one instance per arg, and that arg is str formatted into cmd, pre_cmd, and tags as "arg"' = None,
         label:   'one label per arg, to use as ec2 tag since arg is often inapproriate, defaults to arg if not provided' = None,
-        pre_cmd: 'optional cmd which runs before cmd is backgrounded' = None,
+        pre_cmd: 'optional cmd which runs before cmd is backgrounded. will be retried on failure.' = None,
         cmd:     'cmd which is run in the background' = None,
         tag:     'tag to set as "<key>=<value>' = None,
         no_rm:   'stop instance instead of terminating when done' = False,
@@ -136,7 +138,7 @@ def new(name:    'name of all instances',
                 def fn():
                     try:
                         if pre_cmd:
-                            aws.ec2.ssh(instance_id, yes=True, cmd=pre_cmd % {'arg': arg}, prefixed=True)
+                            aws.ec2._retry(aws.ec2.ssh)(instance_id, yes=True, cmd=pre_cmd % {'arg': arg}, prefixed=True)
                         aws.ec2.ssh(instance_id, no_tty=True, yes=True, cmd=_cmd(arg, cmd, no_rm, bucket), prefixed=True)
                         instance = aws.ec2._ls([instance_id])[0]
                         aws.ec2._retry(instance.create_tags)(Tags=[{'Key': k, 'Value': v}

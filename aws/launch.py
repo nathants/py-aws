@@ -35,7 +35,9 @@ def _tagify(old):
     return new
 
 def _retry(cmd):
-    return 'max_tries=7; sleep_seconds=1; for i in $(seq 1 $max_tries); do %s && break || echo retrying; sleep $sleep_seconds; [ $i = $max_tries ] && echo all retries failed && exit 1 || true; done' % cmd
+    return cmd
+    # TODO hmm. this not quite working?
+    # return 'max_tries=7; sleep_seconds=1; for i in $(seq 1 $max_tries); do %s && break || echo retrying; sleep $sleep_seconds; [ $i = $max_tries ] && echo all retries failed && exit 1 || true; done' % cmd
 
 def _cmd(arg, cmd, no_rm, bucket):
     _cmd = cmd % {'arg': arg}

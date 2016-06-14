@@ -61,7 +61,6 @@ def _tags(instance):
     return {x['Key']: x['Value'] for x in (instance.tags or {})}
 
 
-# TODO cache wildcard looks. they are too slow. ping host and lookup for real on miss.
 def _ls(tags, state='running', first_n=None, last_n=None):
     if isinstance(state, str):
         assert state in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + state
@@ -404,12 +403,12 @@ def stop(*tags, yes=False, first_n=None, last_n=None, wait=False):
         logging.info('stopped: %s', _pretty(i))
     if wait:
         logging.info('waiting for all to stop')
-        _wait_until('stopped', *instances)
+        _wait_for_state('stopped', *instances)
 
 
 def rm(*tags, yes=False, first_n=None, last_n=None):
     assert tags, 'you cannot stop all things, specify some tags'
-    instances = _ls(tags, ['running', 'stopped'], first_n, last_n)
+    instances = _ls(tags, ['running', 'stopped', 'pending'], first_n, last_n)
     assert instances, 'didnt find any instances for those tags'
     logging.info('going to terminate the following instances:')
     for i in instances:
@@ -417,6 +416,9 @@ def rm(*tags, yes=False, first_n=None, last_n=None):
     if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
+    if {'pending'} & {i.state['Name'] for i in instances}:
+        logging.info('wait for pending instances to be running')
+        _wait_for_state('running', *instances)
     for i in instances:
         i.terminate()
         logging.info('terminated: %s', _pretty(i))
@@ -426,13 +428,13 @@ def _ls_by_ids(*ids):
     return _resource().instances.filter(Filters=[{'Name': 'instance-id', 'Values': ids}])
 
 
-def _wait_until(state, *instances):
+def _wait_for_state(state, *instances_or_instance_ids):
     assert state in ['running', 'stopped']
-    ids = [getattr(i, 'instance_id', i) for i in instances]
+    ids = [getattr(i, 'instance_id', i) for i in instances_or_instance_ids]
     for i in range(300):
         try:
             new_instances = _ls(ids, state=state)
-            assert len(instances) == len(new_instances), '%s != %s' % (len(instances), (new_instances))
+            assert len(ids) == len(new_instances), '%s != %s' % (len(ids), (new_instances))
             return new_instances
         except:
             time.sleep(10 + 5 * random.random())
@@ -448,6 +450,8 @@ def _wait_for_ssh(*instances):
             assert len(running) == len(instances)
             ssh(*[i.instance_id for i in running], cmd='whoami > /dev/null', yes=True, quiet=True, timeout=30)
             return [i.public_dns_name for i in instances]
+        except KeyboardInterrupt:
+            raise
         except:
             time.sleep(max(0, 5 - (time.time() - start)))
     assert False, 'failed to wait for ssh'
@@ -505,7 +509,7 @@ def wait(*tags, state='running', yes=False, first_n=None, last_n=None, ssh=False
     if ssh:
         _wait_for_ssh(*instances)
     else:
-        _wait_until(state, *instances)
+        _wait_for_state(state, *instances)
         for i in instances:
             logging.info('%s is %s', _pretty(i), state)
 
@@ -677,26 +681,47 @@ def _blocks(gigs):
                      'DeleteOnTermination': True}}]
 
 
+def _tear_down_spot_instances(request_ids):
+    _client().cancel_spot_instance_requests(SpotInstanceRequestIds=request_ids)
+    logging.info('cancelled spot requests:\n%s', '\n'.join(request_ids))
+    xs = _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)['SpotInstanceRequests']
+    xs = [x.get('InstanceId') for x in xs]
+    xs = [x for x in xs if x]
+    if xs:
+        rm(*xs, yes=True)
+
+
 def _create_spot_instances(**opts):
     request_ids = [x['SpotInstanceRequestId'] for x in _client().request_spot_instances(**opts)['SpotInstanceRequests']]
     logging.info("wait for spot request to be filled for ids:\n%s", '\n'.join(request_ids))
-    for _ in range(300):
-        try:
-            # TODO need to check here to see if spot request failed
-            # with bad params or something, otherwise hangs forever
-            # poll instead of waiter?
-            # _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)
-            # TODO waiters are awful. remove this.
-            _client().get_waiter('spot_instance_request_fulfilled').wait(SpotInstanceRequestIds=request_ids)
-            break
-        except botocore.exceptions.WaiterError: # fails when spot-request-id does not exist (yet)
-            time.sleep(3 + random.random())
+    last = None
+    try:
+        for _ in range(300):
+            xs = _retry(_client().describe_spot_instance_requests)(SpotInstanceRequestIds=request_ids)['SpotInstanceRequests']
+            states = [x['State'] for x in xs]
+            if {'cancelled', 'closed', 'failed'} & set(states):
+                for kind in ['Fault', 'Status']:
+                    for msg in {x.get(kind, {}).get('Message') for x in xs}:
+                        if msg:
+                            logging.info(kind.lower() + ': %s', msg)
+                raise AssertionError('some requests failed')
+            elif {'active'} == set(states) and all(x.get('InstanceId') for x in xs):
+                break
+            else:
+                current = len([x for x in states if x == 'open'])
+                if current != last:
+                    logging.info('waiting for %s requests', current)
+                    last = current
+                time.sleep(4 + random.random())
+        else:
+            raise AssertionError('failed to wait for spot requests')
+    except:
+        _tear_down_spot_instances(request_ids)
+        raise
     else:
-        raise AssertionError('failed to wait for spot requests')
-    instance_ids = [x['InstanceId'] for x in _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)['SpotInstanceRequests']]
-    logging.info('request fulfilled with instance-ids:\n%s', '\n'.join(instance_ids))
-    instances = _ls(instance_ids, state='all')
-    return instances
+        instance_ids = [x['InstanceId'] for x in xs]
+        instances = _ls(instance_ids, state='all')
+        return instances
 
 
 def _make_spot_opts(spot, **opts):
@@ -782,10 +807,13 @@ def new(name:  'name of the instance',
         else:
             logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
             instances = _resource().create_instances(**opts)
-        logging.info('instances: %s', [i.instance_id for i in instances])
+        logging.info('instances:\n%s', '\n'.join([i.instance_id for i in instances]))
         try:
             _wait_for_ssh(*instances)
             break
+        except KeyboardInterrupt:
+            rm(*[i.instance_id for i in instances], yes=True)
+            raise
         except:
             rm(*[i.instance_id for i in instances], yes=True)
             logging.exception('failed to spinup and then wait for ssh on instances, retrying...')
@@ -884,7 +912,7 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
     assert len(instances) == 1, 'didnt find exactly one instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     instance = instances[0]
     instance.stop()
-    _wait_until('stopped', instance)
+    _wait_for_state('stopped', instance)
     logging.info('going to image the following instance:')
     logging.info(' ' + _pretty(instance))
     if is_cli and not yes:

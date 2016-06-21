@@ -61,6 +61,7 @@ def _tags(instance):
     return {x['Key']: x['Value'] for x in (instance.tags or {})}
 
 
+@_retry
 def _ls(tags, state='running', first_n=None, last_n=None):
     if isinstance(state, str):
         assert state in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + state

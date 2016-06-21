@@ -449,7 +449,7 @@ def _wait_for_ssh(*instances):
         start = time.time()
         try:
             assert len(running) == len(instances)
-            ssh(*[i.instance_id for i in running], cmd='whoami > /dev/null', yes=True, quiet=True, timeout=30)
+            ssh(*[i.instance_id for i in running], cmd='whoami > /dev/null', yes=True, quiet=True, timeout=5)
             return [i.public_dns_name for i in instances]
         except KeyboardInterrupt:
             raise

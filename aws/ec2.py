@@ -1,4 +1,6 @@
 import boto3
+import json
+import contextlib
 import botocore.exceptions
 import datetime
 import itertools
@@ -47,14 +49,22 @@ def _retry(f):
     return fn
 
 
-@util.cached.func
 def _resource():
     return boto3.resource('ec2')
 
 
-@util.cached.func
 def _client():
     return boto3.client('ec2')
+
+
+@contextlib.contextmanager
+def _region(name):
+    session = boto3.DEFAULT_SESSION
+    boto3.setup_default_session(region_name=name)
+    try:
+        yield
+    finally:
+        boto3.DEFAULT_SESSION = session
 
 
 def _tags(instance):
@@ -137,6 +147,7 @@ def _pretty(instance, ip=False, all_tags=False):
             instance.instance_type,
             instance.state['Name'],
             instance.instance_id,
+            instance.placement['AvailabilityZone'],
             (instance.public_dns_name or '<no-ip>' if ip else None),
             ','.join([x['GroupName'] for x in instance.security_groups]),
             ' '.join('%s=%s' % (k, v)
@@ -215,9 +226,9 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
                                   stream=False,
                                   hide_stderr=quiet)
                     except:
-                        failures.append(util.colors.red('failure: ') + instance.public_dns_name)
+                        failures.append(util.colors.red('failure: ') + _name(instance) + ': ' + instance.public_dns_name)
                     else:
-                        successes.append(util.colors.green('success: ') + instance.public_dns_name)
+                        successes.append(util.colors.green('success: ') + _name(instance) + ': ' + instance.public_dns_name)
                 return fn
             pool.thread.wait(*map(run, instances), max_threads=max_threads)
             if not quiet:
@@ -444,7 +455,7 @@ def _wait_for_state(state, *instances_or_instance_ids):
 
 def _wait_for_ssh(*instances):
     logging.info('wait for ssh...')
-    for _ in range(100):
+    for _ in range(200):
         running = _ls([i.id for i in instances], state='running')
         start = time.time()
         try:
@@ -553,6 +564,7 @@ def auths(ip):
         yield '%s [%s]' % (util.colors.green(sg.group_name), sg.group_id)
 
 
+@_retry
 def _sgs(names=None):
     sgs = _resource().security_groups.all()
     if names:
@@ -635,8 +647,13 @@ def amis(name):
         print(' '.join([util.colors.green(ami.image_id)] + ami.name.split('__')))
 
 
-ubuntus = {'xenial': 'ubuntu/images/hvm-ssd/ubuntu-xenial-16.04-amd64-server',
-           'trusty': 'ubuntu/images/hvm-ssd/ubuntu-trusty-14.04-amd64-server'}
+# TODO something better
+ubuntus = {'xenial', 'trusty'}
+ubuntus_hvm_ssd = {'xenial': 'ubuntu/images/hvm-ssd/ubuntu-xenial-16.04-amd64-server',
+                   'trusty': 'ubuntu/images/hvm-ssd/ubuntu-trusty-14.04-amd64-server'}
+ubuntus_pv = {'xenial': 'ubuntu/images/ebs-ssd/ubuntu-xenial-16.04-amd64-server',
+              'trusty': 'ubuntu/images/ebs-ssd/ubuntu-trusty-14.04-amd64-server'}
+
 
 def amis_ubuntu(*name_fragments):
     name_fragments = ('ubuntu/images/',) + name_fragments
@@ -645,8 +662,9 @@ def amis_ubuntu(*name_fragments):
                                                     'Values': ['*%s*' % '*'.join(name_fragments)]},
                                                    {'Name': 'architecture',
                                                     'Values': ['x86_64']},
-                                                   {'Name': 'virtualization-type',
-                                                    'Values': ['hvm']}]))
+                                                   # {'Name': 'virtualization-type',
+                                                   #  'Values': ['hvm']}
+                                                   ]))
     vals = []
     for name, xs in util.iter.groupby(amis, key=lambda x: x.name.split('-')[:-1]):
         ami = sorted(xs, key=lambda x: x.creation_date)[-1]
@@ -768,7 +786,8 @@ def new(name:  'name of the instance',
         init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash $path' % util.strings.b64_encode(init)
     if ami in ubuntus:
         distro = ami
-        ami, _ = [x for x in amis_ubuntu() if ubuntus[distro] in x][0].split()
+        images = ubuntus_pv if type.split('.')[0] in ['t1', 'm1'] else ubuntus_hvm_ssd
+        ami, _ = [x for x in amis_ubuntu() if images[distro] in x][0].split()
         logging.info('using ami ubuntu:%s %s', distro, ami)
     else:
         ami = ami.strip()
@@ -782,29 +801,41 @@ def new(name:  'name of the instance',
     opts['SecurityGroupIds'] = [x.id for x in _sgs(names=[sg])]
     opts['InstanceType'] = type
     opts['BlockDeviceMappings'] = _blocks(gigs)
-    if spot and zone is None:
-        zone = cheapest_zone(type)
-    if zone:
-        opts['Placement'] = {'AvailabilityZone': zone}
-    if vpc:
-        opts['SubnetId'] = _subnet(vpc, zone)
 
     # TODO something like this, but a generator. when spinning up lots of
     # instances, returns them as they become available, retrying failed
     # ones and returning those later. excepts if is ultimately unable to
     # spin up everybody.
 
+    # TODO is this like a threadpool of ec2? with an as_completed iterator?
+
     # TODO do a more surgical retry. dont rm all and start over. keep
     # the good ones, and start over for only as many new ones as we
     # need to fulfill the originally requested number.
 
     for _ in range(5):
+        if spot and zone is None:
+            zone, _, _ = cheapest_zone(type, kind='vpc' if vpc else 'classic')
+        if zone:
+            opts['Placement'] = {'AvailabilityZone': zone}
+        if vpc:
+            opts['SubnetId'] = _subnet(vpc, zone)
+            logging.info('using vpc: %s', vpc)
+        else:
+            logging.info('using ec2-classic')
+
         if spot:
             spot_opts = _make_spot_opts(spot, **opts)
             logging.info('request spot instances:\n' + pprint.pformat(util.dicts.drop_in(spot_opts, ['LaunchSpecification', 'UserData'])))
             # TODO improve the wait-for-spot-fullfillment logic inside _create_spot_instances()
             # TODO currently this can error, which is not so good. compared to _resource().create_instances().
-            instances = _create_spot_instances(**spot_opts)
+            try:
+                instances = _create_spot_instances(**spot_opts)
+            except KeyboardInterrupt:
+                raise
+            except:
+                logging.error('failed to create spot instances, retrying...')
+                continue
         else:
             logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
             instances = _resource().create_instances(**opts)
@@ -847,32 +878,36 @@ def new(name:  'name of the instance',
     return [i.instance_id for i in instances]
 
 
-def _zones():
+def regions():
+    return [x['RegionName'] for x in _client().describe_regions()['Regions']]
+
+
+def zones():
     return [x['ZoneName'] for x in _client().describe_availability_zones()['AvailabilityZones']]
 
 
-def spot_price(type, slice=40):
-    prices = [_client().describe_spot_price_history(InstanceTypes=[type], AvailabilityZone=zone)['SpotPriceHistory'][:slice] for zone in _zones()]
-    prices = list(zip(*prices))
-    return [' '.join(x)
-            for x in [('type', 'time', ' '.join([p['AvailabilityZone'] for p in prices[0]]))] +
-                     [(type,
-                       str(pp[0]['Timestamp']).split('+')[0].replace(' ', 'T')[:-3],
-                       ' '.join(['%.3f' % float(p['SpotPrice']) for p in pp]))
-                      for pp in prices] +
-                     [['-', 'mean:'] + ['%.3f' % statistics.mean(x)
-                                        for x in zip(*[[float(p['SpotPrice'])
-                                                        for p in pp]
-                                                       for pp in prices])]]]
+def max_spot_price(type, kind=None):
+    kinds = [('classic', 'Linux/UNIX'),
+             ('vpc', 'Linux/UNIX (Amazon VPC)')]
+    return json.dumps({zone: {name: max(float(x['SpotPrice'])
+                                        for x in _client().describe_spot_price_history(
+                                            InstanceTypes=[type],
+                                            ProductDescriptions=[_kind],
+                                            AvailabilityZone=zone)['SpotPriceHistory'] or [{'SpotPrice': 100.0}])
+                              for name, _kind in kinds
+                              if kind is None or name == kind}
+                       for zone in zones()})
 
 
-def cheapest_zone(type, slice=1000):
-    res = spot_price(type, slice)
-    zones = res[0].split()[2:]
-    means = [float(x) for x in res[-1].split()[2:]]
-    zone, price = sorted(zip(zones, means), key=lambda x: x[1])[0]
-    logging.info('price: %s', price)
-    return zone
+def cheapest_zone(type, kind=None):
+    res = json.loads(max_spot_price(type, kind))
+    res = [(zone, _kind, price)
+           for zone, xs in res.items()
+           for _kind, price in xs.items()
+           if kind is None or kind == _kind]
+    zone, kind, price = res[0]
+    logging.info('cheapest price: %s', price)
+    return [zone, kind, price]
 
 
 def start(*tags, yes=False, first_n=None, last_n=None, login=False, wait=False):
@@ -943,16 +978,28 @@ def user_data(*tags, first_n=None, last_n=None, yes=False):
     return '\n'.join(data)
 
 
+def copy_image(source_region, image_id):
+    assert source_region != _client()._client_config.region_name, 'your source region is the same region as the current region: %s' % source_region
+    with _region(source_region):
+        image = _resource().Image(image_id)
+    ami_id = _client().copy_image(SourceRegion=source_region,
+                                  SourceImageId=image_id,
+                                  Name=image.name,
+                                  Description=image.description)['ImageId']
+    logging.info('wait for image to be available: %s', ami_id)
+    _client().get_waiter('image_available').wait(ImageIds=[ami_id])
+
 def main():
     globals()['is_cli'] = True
     shell.ignore_closed_pipes()
     util.log.setup(format='%(message)s')
     with util.log.disable('botocore', 'boto3'):
-        try:
+        # try:
             stream = util.hacks.override('--stream')
             with (shell.set_stream() if stream else mock.MagicMock()):
-                shell.dispatch_commands(globals(), __name__)
-        except AssertionError as e:
-            if e.args:
-                logging.info(util.colors.red(e.args[0]))
-            sys.exit(1)
+                with _region(os.environ.get('region')):
+                    shell.dispatch_commands(globals(), __name__)
+        # except AssertionError as e:
+            # if e.args:
+                # logging.info(util.colors.red(e.args[0]))
+            # sys.exit(1)

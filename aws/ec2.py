@@ -80,8 +80,9 @@ def _ls(tags, state='running', first_n=None, last_n=None):
         for s in state:
             assert s in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + s
     is_dns_name = tags and tags[0].endswith('.amazonaws.com')
+    is_ipv4 = tags and all(x.isdigit() or x == '.' for x in tags[0])
     is_instance_id = tags and re.search(r'i\-[a-zA-Z0-9]{8}', tags[0])
-    if tags and not is_dns_name and not is_instance_id and '=' not in tags[0]:
+    if tags and not is_dns_name and not is_instance_id and not is_ipv4 and '=' not in tags[0]:
         tags = ('Name=%s' % tags[0],) + tuple(tags[1:])
     instances = []
     if not tags:
@@ -92,6 +93,9 @@ def _ls(tags, state='running', first_n=None, last_n=None):
             filters = [{'Name': 'instance-state-name', 'Values': state}] if state[0] != 'all' else []
             if is_dns_name:
                 filters += [{'Name': 'dns-name', 'Values': tags_chunk}]
+                instances += list(_resource().instances.filter(Filters=filters))
+            elif is_ipv4:
+                filters += [{'Name': 'private-ip-address', 'Values': tags_chunk}]
                 instances += list(_resource().instances.filter(Filters=filters))
             elif is_instance_id:
                 filters += [{'Name': 'instance-id', 'Values': tags_chunk}]
@@ -212,15 +216,17 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
     if is_cli and not yes and not (len(instances) == 1 and not cmd):
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
+    # TODO have a --stream-only to not accumulate lines for return, here, or in shell.run
     try:
         if cmd and len(instances) > 1:
             failures = []
             successes = []
+            results = []
             def run(instance):
                 def fn():
                     try:
                         shell.run(*make_ssh_cmd(instance),
-                                  callback=_make_callback(instance, quiet),
+                                  callback=_make_callback(instance, quiet, results),
                                   echo=False,
                                   raw_cmd=True,
                                   stream=False,
@@ -237,6 +243,8 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
                     logging.info(' ' + msg)
             if failures:
                 sys.exit(1)
+            else:
+                return results
         elif cmd:
             return shell.run(*make_ssh_cmd(instances[0]),
                              echo=False,
@@ -250,9 +258,14 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
         sys.exit(1)
 
 
-def _make_callback(instance, quiet):
+def _make_callback(instance, quiet, append=None):
     name = _name(instance) + ': ' + instance.public_dns_name + ': '
-    return lambda x: print((x if quiet else name + x).replace('\r', ''), flush=True)
+    def f(x):
+        val = (x if quiet else name + x).replace('\r', '')
+        if append:
+            append.append(val)
+        print(val, flush=True)
+    return f
 
 
 def scp(src, dst, *tags, yes=False, max_threads=0):

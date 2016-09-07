@@ -80,9 +80,10 @@ def _ls(tags, state='running', first_n=None, last_n=None):
         for s in state:
             assert s in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + s
     is_dns_name = tags and tags[0].endswith('.amazonaws.com')
+    is_priv_dns_name = tags and tags[0].endswith('.ec2.internal')
     is_ipv4 = tags and all(x.isdigit() or x == '.' for x in tags[0])
     is_instance_id = tags and re.search(r'i\-[a-zA-Z0-9]{8}', tags[0])
-    if tags and not is_dns_name and not is_instance_id and not is_ipv4 and '=' not in tags[0]:
+    if tags and not is_dns_name and not is_instance_id and not is_ipv4 and not is_priv_dns_name and '=' not in tags[0]:
         tags = ('Name=%s' % tags[0],) + tuple(tags[1:])
     instances = []
     if not tags:
@@ -93,6 +94,9 @@ def _ls(tags, state='running', first_n=None, last_n=None):
             filters = [{'Name': 'instance-state-name', 'Values': state}] if state[0] != 'all' else []
             if is_dns_name:
                 filters += [{'Name': 'dns-name', 'Values': tags_chunk}]
+                instances += list(_resource().instances.filter(Filters=filters))
+            elif is_priv_dns_name:
+                filters += [{'Name': 'private-dns-name', 'Values': tags_chunk}]
                 instances += list(_resource().instances.filter(Filters=filters))
             elif is_ipv4:
                 filters += [{'Name': 'private-ip-address', 'Values': tags_chunk}]
@@ -268,10 +272,10 @@ def _make_callback(instance, quiet, append=None):
     return f
 
 
-def scp(src, dst, *tags, yes=False, max_threads=0):
+def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None):
     assert tags, 'you must specify some tags'
     assert ':' in src + dst, 'you didnt specify a remote path, which starts with ":"'
-    instances = _ls(tags, 'running')
+    instances = _ls(tags, 'running', first_n=first_n, last_n=last_n)
     assert instances, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     logging.info('targeting:')
     for instance in instances:
@@ -1002,17 +1006,39 @@ def copy_image(source_region, image_id):
     logging.info('wait for image to be available: %s', ami_id)
     _client().get_waiter('image_available').wait(ImageIds=[ami_id])
 
+
+def snapshot(*tags, first_n=None, last_n=None, yes=False):
+    assert tags, 'you must specify some tags'
+    instances = _ls(tags, 'running', first_n=first_n, last_n=last_n)
+    assert instances, 'didnt find any instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    logging.info('going to snapshot ebs from the following instances:')
+    for instance in instances:
+        logging.info(' ' + _pretty(instance))
+    if is_cli and not yes:
+        logging.info('\nwould you like to proceed? y/n\n')
+        assert pager.getch() == 'y', 'abort'
+
+    vals = []
+    for instance in instances:
+        volumes = list(instance.volumes.all())
+        assert len(volumes) == 1, 'more than 1 volume, not sure what to snapshot'
+        volume = volumes[0]
+        snapshot = volume.create_snapshot(Description=_name(instance) + '::' + str(datetime.datetime.now().isoformat()))
+        vals.append(snapshot.id)
+    return vals
+
+
 def main():
     globals()['is_cli'] = True
     shell.ignore_closed_pipes()
     util.log.setup(format='%(message)s')
     with util.log.disable('botocore', 'boto3'):
-        # try:
+        try:
             stream = util.hacks.override('--stream')
             with (shell.set_stream() if stream else mock.MagicMock()):
                 with _region(os.environ.get('region')):
                     shell.dispatch_commands(globals(), __name__)
-        # except AssertionError as e:
-            # if e.args:
-                # logging.info(util.colors.red(e.args[0]))
-            # sys.exit(1)
+        except AssertionError as e:
+            if e.args:
+                logging.info(util.colors.red(e.args[0]))
+            sys.exit(1)

@@ -1017,13 +1017,15 @@ def snapshot(*tags, first_n=None, last_n=None, yes=False):
     if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-
     vals = []
     for instance in instances:
-        volumes = list(instance.volumes.all())
+        volumes = [x
+                   for x in instance.volumes.all()
+                   if ['/dev/sda1'] == [y['Device'] for y in x.attachments]]
         assert len(volumes) == 1, 'more than 1 volume, not sure what to snapshot'
         volume = volumes[0]
         snapshot = volume.create_snapshot(Description=_name(instance) + '::' + str(datetime.datetime.now().isoformat()))
+        logging.info('instance: %s, device: /dev/sda1, size: %sG, snapshot: %s', _name(instance), volume.size, snapshot.id)
         vals.append(snapshot.id)
     return vals
 

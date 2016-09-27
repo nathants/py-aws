@@ -1032,6 +1032,13 @@ def snapshot(*tags, first_n=None, last_n=None, yes=False):
     return vals
 
 
+def roles():
+    client = boto3.client('iam')
+    for role in client.list_roles()['Roles']:
+        if role['AssumeRolePolicyDocument']['Statement'] == [{'Action': 'sts:AssumeRole', 'Effect': 'Allow', 'Principal': {'Service': 'ec2.amazonaws.com'}}]:
+            print('name:' + role['RoleName'], 'role:' + role['Arn'].split('role/')[-1])
+
+
 def main():
     globals()['is_cli'] = True
     shell.ignore_closed_pipes()

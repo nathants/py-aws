@@ -1,7 +1,6 @@
 import boto3
 import json
 import contextlib
-import botocore.exceptions
 import datetime
 import itertools
 import logging
@@ -13,7 +12,6 @@ import random
 import re
 import shell
 import shell.conf
-import statistics
 import subprocess
 import sys
 import time
@@ -779,6 +777,7 @@ def new(name:  'name of the instance',
         sg:    'security group name'         = shell.conf.get_or_prompt_pref('sg',   __file__, message='security group name'),
         type:  'instance type'               = shell.conf.get_or_prompt_pref('type', __file__, message='instance type'),
         vpc:   'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  __file__, message='vpc name'),
+        role:  'ec2 iam role'                = None,
         zone:  'ec2 availability zone'       = None,
         gigs:  'gb capacity of primary disk' = 8,
         init:  'cloud init command'          = 'date > /tmp/cloudinit.log',
@@ -820,6 +819,8 @@ def new(name:  'name of the instance',
     opts['SecurityGroupIds'] = [x.id for x in _sgs(names=[sg])]
     opts['InstanceType'] = type
     opts['BlockDeviceMappings'] = _blocks(gigs)
+    if role:
+        opts['IamInstanceProfile'] = {'Name': role}
 
     # TODO something like this, but a generator. when spinning up lots of
     # instances, returns them as they become available, retrying failed

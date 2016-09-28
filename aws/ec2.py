@@ -388,7 +388,7 @@ def _tar_script(src, name, echo_only=False):
               'src=$(pwd)\n'
               'cd $(dirname $src)\n'
               "FILES=$(find -L $(basename $src) -type f %(name)s -o -type l %(name)s)\n"
-              'echo $FILES|tr " " "\\n" 1>&2\n'
+              'echo $FILES|tr " " "\\n"|grep -v \.git 1>&2\n'
               + ('' if echo_only else 'tar cfh - $FILES')) % locals()
     with shell.tempdir(cleanup=False):
         with open('script.sh', 'w') as f:
@@ -760,12 +760,11 @@ def _create_spot_instances(**opts):
         return instances
 
 
-def _make_spot_opts(spot, **opts):
+def _make_spot_opts(spot, opts):
     spot_opts = {}
     spot_opts['SpotPrice'] = str(float(spot))
     spot_opts['InstanceCount'] = opts['MaxCount']
-    specs = ['ImageId', 'KeyName', 'SecurityGroupIds', 'UserData', 'BlockDeviceMappings', 'SubnetId', 'InstanceType', 'Placement']
-    spot_opts['LaunchSpecification'] = specs = util.dicts.take(opts, specs)
+    spot_opts['LaunchSpecification'] = util.dicts.drop(opts, ['MaxCount', 'MinCount'])
     spot_opts = util.dicts.update_in(spot_opts, ['LaunchSpecification', 'UserData'], util.strings.b64_encode)
     return spot_opts
 
@@ -845,7 +844,7 @@ def new(name:  'name of the instance',
             logging.info('using ec2-classic')
 
         if spot:
-            spot_opts = _make_spot_opts(spot, **opts)
+            spot_opts = _make_spot_opts(spot, opts)
             logging.info('request spot instances:\n' + pprint.pformat(util.dicts.drop_in(spot_opts, ['LaunchSpecification', 'UserData'])))
             # TODO improve the wait-for-spot-fullfillment logic inside _create_spot_instances()
             # TODO currently this can error, which is not so good. compared to _resource().create_instances().

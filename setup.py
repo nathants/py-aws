@@ -13,6 +13,7 @@ setuptools.setup(
                       'pager >3, <4',
                       'awscli >1, <2'],
     entry_points={'console_scripts': ['ec2 = aws.ec2:main',
+                                      'elb = aws.elb:main',
                                       'launch = aws.launch:main']},
     description='aws',
 )

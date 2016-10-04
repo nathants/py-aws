@@ -1032,6 +1032,14 @@ def snapshot(*tags, first_n=None, last_n=None, yes=False):
     return vals
 
 
+def num_volumes(*tags, first_n=None, last_n=None, yes=False):
+    assert tags, 'you must specify some tags'
+    instances = _ls(tags, 'running', first_n=first_n, last_n=last_n)
+    assert instances, 'didnt find any instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    for instance in instances:
+        print(len(list(instance.volumes.all())), _pretty(instance))
+
+
 def roles():
     client = boto3.client('iam')
     for role in client.list_roles()['Roles']:

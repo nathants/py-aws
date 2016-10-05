@@ -209,8 +209,13 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
     if os.path.exists(cmd):
         with open(cmd) as f:
             cmd = f.read()
-    if cmd:
-        cmd = 'set -e;' + cmd
+    if cmd and 'set -e' not in cmd:
+        if cmd.startswith('#!'):
+            lines = cmd.splitlines()
+            lines.insert(1, 'set -e')
+            cmd = '\n'.join(lines)
+        else:
+            cmd = 'set -e\n' + cmd
     assert (cmd and instances) or len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     if not (quiet and yes):
         for i in instances:

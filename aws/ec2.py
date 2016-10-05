@@ -254,9 +254,9 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
                 logging.info('\nresults:')
                 for msg in successes + failures:
                     logging.info(' ' + msg)
-            logging.info('\ntotals:')
-            logging.info(util.colors.green(' successes: ') + str(len(successes)))
-            logging.info(util.colors.red(' failures: ') + str(len(failures)))
+                logging.info('\ntotals:')
+                logging.info(util.colors.green(' successes: ') + str(len(successes)))
+                logging.info(util.colors.red(' failures: ') + str(len(failures)))
             if failures:
                 sys.exit(1)
             else:

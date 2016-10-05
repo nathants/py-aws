@@ -80,8 +80,9 @@ def _ls(tags, state='running', first_n=None, last_n=None):
     is_dns_name = tags and tags[0].endswith('.amazonaws.com')
     is_priv_dns_name = tags and tags[0].endswith('.ec2.internal')
     is_ipv4 = tags and all(x.isdigit() or x == '.' for x in tags[0])
+    is_priv_ipv4 = tags and all(x.isdigit() or x == '.' for x in tags[0]) and tags[0].startswith('10.')
     is_instance_id = tags and re.search(r'i\-[a-zA-Z0-9]{8}', tags[0])
-    if tags and not is_dns_name and not is_instance_id and not is_ipv4 and not is_priv_dns_name and '=' not in tags[0]:
+    if tags and not is_dns_name and not is_instance_id and not is_ipv4 and not is_priv_ipv4 and not is_priv_dns_name and '=' not in tags[0]:
         tags = ('Name=%s' % tags[0],) + tuple(tags[1:])
     instances = []
     if not tags:
@@ -96,8 +97,11 @@ def _ls(tags, state='running', first_n=None, last_n=None):
             elif is_priv_dns_name:
                 filters += [{'Name': 'private-dns-name', 'Values': tags_chunk}]
                 instances += list(_resource().instances.filter(Filters=filters))
-            elif is_ipv4:
+            elif is_priv_ipv4:
                 filters += [{'Name': 'private-ip-address', 'Values': tags_chunk}]
+                instances += list(_resource().instances.filter(Filters=filters))
+            elif is_ipv4:
+                filters += [{'Name': 'ip-address', 'Values': tags_chunk}]
                 instances += list(_resource().instances.filter(Filters=filters))
             elif is_instance_id:
                 filters += [{'Name': 'instance-id', 'Values': tags_chunk}]

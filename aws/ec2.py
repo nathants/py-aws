@@ -1073,14 +1073,18 @@ def snapshots(substring):
     results = util.iter.groupby(results, lambda x: x['name'])
     results = [(k, sorted(v, key=lambda x: x['date'], reverse=True)) for k, v in results]
     results = sorted(results, key=lambda x: util.iter.alphanumeric_key(x[0]))
+    results = sorted(results, key=lambda x: x[1][0]['date'].split(':')[:-1], reverse=True)
+    res = ''
     for k, vs in results:
         v = vs[0]
-        print(v['name'] +
-              (' [progress: %s]' % v['progress'] if v['state'] != 'completed' else ''),
-              '[%sZ]' % ':'.join(v['date'].split(':')[:-1]),
-              '[%s]' % v['id'],
-              '[%sGB]' % v['size'],
-              '[versions: %s]' % len(vs))
+        res += ' '.join([
+            '{%s' % v['name'],
+            '{[progress: %s]' % v['progress'] if v['state'] != 'completed' else '{[completed]',
+            '{[%sZ]' % ':'.join(v['date'].split(':')[:-1]),
+            '{[%s]' % v['id'],
+            '{[%sGB]' % v['size'],
+            '{[versions: %s]' % len(vs)]) + '\n'
+    print(util.strings.align(res, '{'))
 
 
 def num_volumes(*tags, first_n=None, last_n=None, yes=False):

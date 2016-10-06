@@ -1,3 +1,4 @@
+import argh
 import boto3
 import json
 import contextlib
@@ -30,6 +31,10 @@ is_cli = False
 
 
 ssh_args = ' -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no '
+
+
+def _now():
+    return str(datetime.datetime.utcnow().isoformat()) + 'Z'
 
 
 def _retry(f):
@@ -882,7 +887,7 @@ def new(name:  'name of the instance',
             logging.exception('failed to spinup and then wait for ssh on instances, retrying...')
     else:
         assert False, 'failed to spinup and then wait for ssh on instances after 5 tries. aborting.'
-    date = str(datetime.datetime.now()).replace(' ', 'T')
+    date = _now()
     for n, i in enumerate(instances):
         set_tags = [{'Key': 'Name', 'Value': name},
                     {'Key': 'owner', 'Value': owner},
@@ -1038,10 +1043,44 @@ def snapshot(*tags, first_n=None, last_n=None, yes=False):
                    if ['/dev/sda1'] == [y['Device'] for y in x.attachments]]
         assert len(volumes) == 1, 'more than 1 volume, not sure what to snapshot'
         volume = volumes[0]
-        snapshot = volume.create_snapshot(Description=_name(instance) + '::' + str(datetime.datetime.now().isoformat()))
+        snapshot = volume.create_snapshot(Description=_name(instance) + '::' + _now())
         logging.info('instance: %s, device: /dev/sda1, size: %sG, snapshot: %s', _name(instance), volume.size, snapshot.id)
         vals.append(snapshot.id)
     return vals
+
+
+@argh.arg('substring', nargs='?', default=None)
+def snapshot_ls(substring):
+    results = []
+    next_token = ''
+    while True:
+        resp = _client().describe_snapshots(OwnerIds=['self'], NextToken=next_token)
+        results.extend(resp['Snapshots'])
+        next_token = resp.get('NextToken')
+        if not next_token:
+            break
+    results = [x for x in results if '::' in x['Description']]
+    results = [{'name': x['Description'].split('::')[0],
+                'date': x['Description'].split('::')[1],
+                'state': x['State'],
+                'progress': x['Progress'],
+                'id': x['SnapshotId'],
+                'volume': x['VolumeId'],
+                'size': x['VolumeSize']}
+               for x in results]
+    if substring:
+        results = [x for x in results if substring in x['name']]
+    results = util.iter.groupby(results, lambda x: x['name'])
+    results = [(k, sorted(v, key=lambda x: x['date'], reverse=True)) for k, v in results]
+    results = sorted(results, key=lambda x: util.iter.alphanumeric_key(x[0]))
+    for k, vs in results:
+        v = vs[0]
+        print(v['name'] +
+              (' [progress: %s]' % v['progress'] if v['state'] != 'completed' else ''),
+              '[%sZ]' % ':'.join(v['date'].split(':')[:-1]),
+              '[%s]' % v['id'],
+              '[%sGB]' % v['size'],
+              '[versions: %s]' % len(vs))
 
 
 def num_volumes(*tags, first_n=None, last_n=None, yes=False):

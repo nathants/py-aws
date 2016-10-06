@@ -1050,7 +1050,7 @@ def snapshot(*tags, first_n=None, last_n=None, yes=False):
 
 
 @argh.arg('substring', nargs='?', default=None)
-def snapshot_ls(substring):
+def snapshots(substring):
     results = []
     next_token = ''
     while True:

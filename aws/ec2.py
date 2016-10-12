@@ -600,9 +600,12 @@ def auths(ip):
 
 @_retry
 def _sgs(names=None):
-    sgs = _resource().security_groups.all()
+    sgs = list(_resource().security_groups.all())
     if names:
-        sgs = [x for x in sgs if x.group_name in names]
+        sgs = [x
+               for x in sgs
+               if x.group_name in names
+               or x.group_id in names]
     return sgs
 
 
@@ -610,9 +613,8 @@ def authorize(ip, *names, yes=False):
     assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
     names = [util.strings.rm_color(x) for x in names]
     sgs = _sgs(names)
+    assert sgs, 'didnt find any security groups'
     logging.info('going to authorize your ip %s to these groups:', util.colors.yellow(ip))
-    if names:
-        sgs = [x for x in sgs if x.group_name in names]
     for sg in sgs:
         logging.info(' %s [%s]', sg.group_name, sg.group_id)
     if is_cli and not yes:
@@ -634,7 +636,7 @@ def authorize(ip, *names, yes=False):
                 logging.info('%s: %s %s %s', re.sub(r'.*\((.*)\).*', r'\1', str(e)), sg.group_name, sg.group_id, proto)
 
 
-def revoke(ip, *names, yes=False):
+def deauthorize(ip, *names, yes=False):
     assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
     sgs = _sgs(names) if names else _wildcard_security_groups(ip)
     assert sgs, 'didnt find any security groups'

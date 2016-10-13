@@ -83,11 +83,12 @@ def _ls(tags, state='running', first_n=None, last_n=None):
         for s in state:
             assert s in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + s
     is_dns_name = tags and tags[0].endswith('.amazonaws.com')
+    is_sg_id = tags and tags[0].startswith('sg-')
     is_priv_dns_name = tags and tags[0].endswith('.ec2.internal')
     is_ipv4 = tags and all(x.isdigit() or x == '.' for x in tags[0])
     is_priv_ipv4 = tags and all(x.isdigit() or x == '.' for x in tags[0]) and tags[0].startswith('10.')
     is_instance_id = tags and re.search(r'i\-[a-zA-Z0-9]{8}', tags[0])
-    if tags and not is_dns_name and not is_instance_id and not is_ipv4 and not is_priv_ipv4 and not is_priv_dns_name and '=' not in tags[0]:
+    if tags and not is_dns_name and not is_sg_id and not is_instance_id and not is_ipv4 and not is_priv_ipv4 and not is_priv_dns_name and '=' not in tags[0]:
         tags = ('Name=%s' % tags[0],) + tuple(tags[1:])
     instances = []
     if not tags:
@@ -110,6 +111,10 @@ def _ls(tags, state='running', first_n=None, last_n=None):
                 instances += list(_resource().instances.filter(Filters=filters))
             elif is_instance_id:
                 filters += [{'Name': 'instance-id', 'Values': tags_chunk}]
+                instances += list(_resource().instances.filter(Filters=filters))
+            elif is_sg_id:
+                filters += [{'Name': 'group-id', 'Values': tags_chunk}, # ec2 classic
+                            {'Name': 'instance.group-id', 'Values': tags_chunk}] # ec2 modern
                 instances += list(_resource().instances.filter(Filters=filters))
             elif any('*' in tag for tag in tags_chunk):
                 instances += [i for i in _resource().instances.filter(Filters=filters) if _matches(i, tags_chunk)]
@@ -196,8 +201,8 @@ def ls(*tags, state='all', first_n=None, last_n=None, ip=False, all_tags=False):
     print(x, flush=True)
 
 
-def _remote_cmd(cmd):
-    return "mkdir -p ~/.cmds; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path; bash $path" % util.strings.b64_encode(cmd)
+def _remote_cmd(cmd, address):
+    return 'fail_msg="failed to run cmd on address: %s"; mkdir -p ~/.cmds || echo $fail_msg; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path || echo $fail_msg; bash $path' % (address, util.strings.b64_encode(cmd))
 
 
 def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=20, timeout=None, no_tty=False, user='ubuntu', key=None, echo=False, prefixed=False):
@@ -230,7 +235,7 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
         logging.info('ec2.ssh running against tags: %s, with cmd: %s', tags, cmd)
     if timeout:
         ssh_cmd = ['timeout', '{}s'.format(timeout)] + ssh_cmd
-    make_ssh_cmd = lambda instance: ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd)]
+    make_ssh_cmd = lambda instance: ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd, instance.public_dns_name)]
     if is_cli and not yes and not (len(instances) == 1 and not cmd):
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'

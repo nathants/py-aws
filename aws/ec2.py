@@ -167,6 +167,7 @@ def _pretty(instance, ip=False, all_tags=False):
             instance.instance_type,
             instance.state['Name'],
             instance.instance_id,
+            ('spot' if instance.spot_instance_request_id else 'ondemand'),
             instance.placement['AvailabilityZone'],
             (instance.public_dns_name or '<no-ip>' if ip else None),
             ','.join([x['GroupName'] for x in instance.security_groups]),
@@ -202,7 +203,7 @@ def ls(*tags, state='all', first_n=None, last_n=None, ip=False, all_tags=False):
 
 
 def _remote_cmd(cmd, address):
-    return 'fail_msg="failed to run cmd on address: %s"; mkdir -p ~/.cmds || echo $fail_msg; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path || echo $fail_msg; bash $path' % (address, util.strings.b64_encode(cmd))
+    return 'fail_msg="failed to run cmd on address: %s"; mkdir -p ~/.cmds || echo $fail_msg; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path || echo $fail_msg; bash $path; code=$?; if [ $code != 0 ]; then echo $fail_msg; exit $code; fi' % (address, util.strings.b64_encode(cmd)) # noqa
 
 
 def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=20, timeout=None, no_tty=False, user='ubuntu', key=None, echo=False, prefixed=False):
@@ -595,7 +596,13 @@ def _wildcard_security_groups(ip):
 
 def sgs():
     for sg in _sgs():
-        yield '%s [%s]' % (util.colors.green(sg.group_name), sg.group_id)
+        yield '%s %s' % (sg.group_name, sg.group_id)
+
+
+def sg_id(name):
+    xs = [x for x in _sgs() if x.group_name == name]
+    assert len(xs) == 1, 'didnt find exactly one match: %s' % xs
+    return xs[0].group_id
 
 
 def auths(ip):

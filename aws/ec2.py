@@ -200,6 +200,8 @@ def ls(*tags, state='all', first_n=None, last_n=None, ip=False, all_tags=False):
     x = map(lambda y: _pretty(y, ip=ip, all_tags=all_tags), x)
     x = '\n'.join(x)
     print(x, flush=True)
+    if not x:
+        sys.exit(1)
 
 
 def _remote_cmd(cmd, address):

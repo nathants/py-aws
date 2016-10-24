@@ -195,9 +195,9 @@ def ip_private(*tags, first_n=None, last_n=None):
     return [i.private_ip_address for i in _ls(tags, 'running', first_n, last_n)]
 
 
-def ls(*tags, state='all', first_n=None, last_n=None, ip=False, all_tags=False):
+def ls(*tags, state='all', first_n=None, last_n=None, all_tags=False):
     x = _ls(tags, state, first_n, last_n)
-    x = map(lambda y: _pretty(y, ip=ip, all_tags=all_tags), x)
+    x = map(lambda y: _pretty(y, all_tags=all_tags), x)
     x = '\n'.join(x)
     print(x, flush=True)
     if not x:

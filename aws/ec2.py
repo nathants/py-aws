@@ -323,7 +323,7 @@ def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None):
             _src = host + src if src.startswith(':') else src
             _dst = host + dst if dst.startswith(':') else dst
             try:
-                shell.run('scp', _src, _dst, callback=lambda x: print(color(name + x), flush=True))
+                shell.run('scp', ssh_args, _src, _dst, callback=lambda x: print(color(name + x), flush=True))
             except:
                 failures.append(util.colors.red('failure: ') + instance.public_dns_name)
             else:

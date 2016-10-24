@@ -598,6 +598,7 @@ def _has_wildcard_permission(sg, ip):
 def _wildcard_security_groups(ip):
     return [sg for sg in _sgs() if _has_wildcard_permission(sg, ip)]
 
+
 def sgs():
     for sg in _sgs():
         yield '%s %s' % (sg.group_name, sg.group_id)
@@ -607,6 +608,12 @@ def sg_id(name):
     xs = [x for x in _sgs() if x.group_name == name]
     assert len(xs) == 1, 'didnt find exactly one match: %s' % xs
     return xs[0].group_id
+
+
+def sg_name(id):
+    xs = [x for x in _sgs() if x.group_id == id]
+    assert len(xs) == 1, 'didnt find exactly one match: %s' % xs
+    return xs[0].group_name
 
 
 def auths(ip):

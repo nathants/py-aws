@@ -199,9 +199,11 @@ def ls(*tags, state='all', first_n=None, last_n=None, all_tags=False):
     x = _ls(tags, state, first_n, last_n)
     x = map(lambda y: _pretty(y, all_tags=all_tags), x)
     x = '\n'.join(x)
-    print(x, flush=True)
     if not x:
         sys.exit(1)
+    else:
+        print(x, flush=True)
+
 
 
 def _remote_cmd(cmd, address):

@@ -1115,7 +1115,7 @@ def roles():
     client = boto3.client('iam')
     for role in client.list_roles()['Roles']:
         if role['AssumeRolePolicyDocument']['Statement'] == [{'Action': 'sts:AssumeRole', 'Effect': 'Allow', 'Principal': {'Service': 'ec2.amazonaws.com'}}]:
-            print('name:' + role['RoleName'], 'role:' + role['Arn'].split('role/')[-1])
+            print(role['RoleName'])
 
 
 def main():

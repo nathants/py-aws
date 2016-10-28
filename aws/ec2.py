@@ -188,10 +188,14 @@ def _name_group(instance):
 
 
 def ip(*tags, first_n=None, last_n=None):
-    return [i.public_ip_address for i in _ls(tags, 'running', first_n, last_n)]
+    return [i.public_dns_name for i in _ls(tags, 'running', first_n, last_n)]
 
 
 def ip_private(*tags, first_n=None, last_n=None):
+    return [i.private_dns_name for i in _ls(tags, 'running', first_n, last_n)]
+
+
+def ipv4_private(*tags, first_n=None, last_n=None):
     return [i.private_ip_address for i in _ls(tags, 'running', first_n, last_n)]
 
 

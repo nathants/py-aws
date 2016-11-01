@@ -209,7 +209,6 @@ def ls(*tags, state='all', first_n=None, last_n=None, all_tags=False):
         print(x, flush=True)
 
 
-
 def _remote_cmd(cmd, address):
     return 'fail_msg="failed to run cmd on address: %s"; mkdir -p ~/.cmds || echo $fail_msg; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path || echo $fail_msg; bash $path; code=$?; if [ $code != 0 ]; then echo $fail_msg; exit $code; fi' % (address, util.strings.b64_encode(cmd)) # noqa
 
@@ -831,6 +830,7 @@ def new(name:  'name of the instance',
         num:   'number of instances'         = 1,
         spot:  'spot price to bid'           = None,
         tty:   'run cmd in a tty'            = False,
+        no_wait: 'do not wait for ssh'       = False,
         login: 'login into the instance'     = False):
     if spot:
         spot = float(spot)
@@ -905,15 +905,18 @@ def new(name:  'name of the instance',
             logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
             instances = _resource().create_instances(**opts)
         logging.info('instances:\n%s', '\n'.join([i.instance_id for i in instances]))
-        try:
-            _wait_for_ssh(*instances)
+        if no_wait:
             break
-        except KeyboardInterrupt:
-            rm(*[i.instance_id for i in instances], yes=True)
-            raise
-        except:
-            rm(*[i.instance_id for i in instances], yes=True)
-            logging.exception('failed to spinup and then wait for ssh on instances, retrying...')
+        else:
+            try:
+                _wait_for_ssh(*instances)
+                break
+            except KeyboardInterrupt:
+                rm(*[i.instance_id for i in instances], yes=True)
+                raise
+            except:
+                rm(*[i.instance_id for i in instances], yes=True)
+                logging.exception('failed to spinup and then wait for ssh on instances, retrying...')
     else:
         assert False, 'failed to spinup and then wait for ssh on instances after 5 tries. aborting.'
     date = _now()
@@ -1066,20 +1069,20 @@ def snapshot(*tags, first_n=None, last_n=None, yes=False):
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     vals = []
+    now = _now()
     for instance in instances:
         volumes = [x
                    for x in instance.volumes.all()
                    if ['/dev/sda1'] == [y['Device'] for y in x.attachments]]
         assert len(volumes) == 1, 'more than 1 volume, not sure what to snapshot'
         volume = volumes[0]
-        snapshot = volume.create_snapshot(Description=_name(instance) + '::' + _now())
+        snapshot = volume.create_snapshot(Description=_name(instance) + '::' + now)
         logging.info('instance: %s, device: /dev/sda1, size: %sG, snapshot: %s', _name(instance), volume.size, snapshot.id)
         vals.append(snapshot.id)
     return vals
 
 
-@argh.arg('substring', nargs='?', default=None)
-def snapshots(substring):
+def snapshots(regex=None, min_date=None, make_ami=False, yes=False):
     results = []
     next_token = ''
     while True:
@@ -1097,8 +1100,10 @@ def snapshots(substring):
                 'volume': x['VolumeId'],
                 'size': x['VolumeSize']}
                for x in results]
-    if substring:
-        results = [x for x in results if substring in x['name']]
+    if regex:
+        results = [x for x in results if re.search(regex, x['name'])]
+    if min_date:
+        results = [x for x in results if min_date <= x['date']]
     results = util.iter.groupby(results, lambda x: x['name'])
     results = [(k, sorted(v, key=lambda x: x['date'], reverse=True)) for k, v in results]
     results = sorted(results, key=lambda x: util.iter.alphanumeric_key(x[0]))
@@ -1109,12 +1114,29 @@ def snapshots(substring):
         res += ' '.join([
             '{%s' % v['name'],
             '{[progress: %s]' % v['progress'] if v['state'] != 'completed' else '{[completed]',
-            '{[%sZ]' % ':'.join(v['date'].split(':')[:-1]),
+            '{[%s]' % v['date'],
             '{[%s]' % v['id'],
             '{[%sGB]' % v['size'],
             '{[versions: %s]' % len(vs)]) + '\n'
-    print(util.strings.align(res, '{'))
-
+    logging.info(util.strings.align(res, '{'))
+    if make_ami:
+        if is_cli and not yes:
+            logging.info('\nwould you like to proceed? y/n\n')
+            assert pager.getch() == 'y', 'abort'
+        for k, vs in results:
+            v = vs[0]
+            block = _blocks(v['size'])[0]
+            block['Ebs']['SnapshotId'] = v['id']
+            name = '%s__%s' % (v['name'], v['date'].replace(':', '_'))
+            id = _client().register_image(
+                Name=name,
+                Architecture='x86_64',
+                RootDeviceName=block['DeviceName'],
+                VirtualizationType='hvm',
+                BlockDeviceMappings=[block],
+                # SriovNetSupport='simple', # probably want this in the future, enhanced io for current gen in vpc
+            )['ImageId']
+            print(name, id)
 
 def num_volumes(*tags, first_n=None, last_n=None, yes=False):
     assert tags, 'you must specify some tags'

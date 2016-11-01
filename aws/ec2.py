@@ -213,9 +213,24 @@ def _remote_cmd(cmd, address):
     return 'fail_msg="failed to run cmd on address: %s"; mkdir -p ~/.cmds || echo $fail_msg; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path || echo $fail_msg; bash $path; code=$?; if [ $code != 0 ]; then echo $fail_msg; exit $code; fi' % (address, util.strings.b64_encode(cmd)) # noqa
 
 
-def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_threads=20, timeout=None, no_tty=False, user='ubuntu', key=None, echo=False, prefixed=False):
+def ssh(
+        *tags,
+        first_n=None,
+        last_n=None,
+        quiet: 'less output' = False,
+        cmd: 'cmd to run on remote host, can also be a file which will be read' ='',
+        yes: 'no prompt to proceed' = False,
+        max_threads: 'max ssh connections' = 20,
+        timeout: 'seconds before ssh cmd considered failed' = None,
+        no_tty: 'when backgrounding a process, you dont want a tty' = False,
+        user: 'specify ssh user' = 'ubuntu',
+        key: 'speficy ssh key' = None,
+        echo: 'echo some info about what was run on which hosts' = False,
+        prefixed: 'when running against a single host, should streaming output be prefixed with name and ip' = False,
+        failure_message: 'error message to print for a failed host' = '{name} {ip} {ipv4_private} failed'):
     """
     tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
+    no_tty is the opposite, which is good for backgrounding or nohuping processes.
     """
     assert tags, 'you must specify some tags'
     @_retry
@@ -263,6 +278,11 @@ def ssh(*tags, first_n=None, last_n=None, quiet=False, cmd='', yes=False, max_th
                                   stream=False,
                                   hide_stderr=quiet)
                     except:
+                        if failure_message:
+                            print(failure_message.format(ip=instance.public_dns_name,
+                                                         ipv4_private=instance.private_ip_address,
+                                                         name=_name(instance)),
+                                  flush=True)
                         failures.append(util.colors.red('failure: ') + _name(instance) + ': ' + instance.public_dns_name)
                     else:
                         successes.append(util.colors.green('success: ') + _name(instance) + ': ' + instance.public_dns_name)

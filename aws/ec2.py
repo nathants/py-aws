@@ -1186,6 +1186,10 @@ def graphs(*tags,
            metric_type: 'cpu|disk|network' = 'cpu'):
     # ec2 metrics http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/ec2-metricscollected.html
     # all available metrics: aws cloudwatch list-metrics --namespace "AWS/EC2" --dimensions Name=InstanceId,Value=$(ec2 ls -s running|head -n1|awk '{print $4}') | jq .Metrics[].MetricName -r|sort|grep -v status -i
+    assert duration[-1] in ['H', 'D'], 'duration is something like 3H or 1D, not: %s' % duration
+    assert duration[:-1].isdigit(), 'duration is something like 3H or 1D, not: %s' % duration
+    if duration[-1] == 'H':
+        duration = 'T' + duration
     metrics = [
         'CPUUtilization',
         'DiskReadBytes',
@@ -1207,7 +1211,7 @@ def graphs(*tags,
             url += "~(~'AWS*2fEC2~'{metric}~'InstanceId~'{instance_id}~(period~{period}))".format(**locals())
             for instance_id in instance_ids[1:]:
                 url += "~(~'...~'{instance_id}~(period~{period}))".format(**locals())
-            url += ")~region~'{region}~start~'-PT{duration}~end~'P0D);namespace=AWS/EC2;dimensions=InstanceId".format(**locals())
+            url += ")~region~'{region}~start~'-P{duration}~end~'P0D);namespace=AWS/EC2;dimensions=InstanceId".format(**locals())
             try:
                 subprocess.check_call(['xdg-open', url]) # ubuntu
             except:

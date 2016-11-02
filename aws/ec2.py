@@ -1096,7 +1096,7 @@ def snapshot(*tags, first_n=None, last_n=None, yes=False):
                    if ['/dev/sda1'] == [y['Device'] for y in x.attachments]]
         assert len(volumes) == 1, 'more than 1 volume, not sure what to snapshot'
         volume = volumes[0]
-        snapshot = volume.create_snapshot(Description=_name(instance) + '::' + now)
+        snapshot = volume.create_snapshot(Description=_name(instance) + '::' + instance.instance_id + '::' + now)
         logging.info('instance: %s, device: /dev/sda1, size: %sG, snapshot: %s', _name(instance), volume.size, snapshot.id)
         vals.append(snapshot.id)
     return vals
@@ -1138,8 +1138,9 @@ def snapshots(regex=None, min_date=None, make_ami=False, yes=False):
             '{[%s]' % v['id'],
             '{[%sGB]' % v['size'],
             '{[versions: %s]' % len(vs)]) + '\n'
-    logging.info(util.strings.align(res, '{'))
+    res = util.strings.align(res, '{').splitlines()
     if make_ami:
+        logging.info('\n'.join(res))
         if is_cli and not yes:
             logging.info('\nwould you like to proceed? y/n\n')
             assert pager.getch() == 'y', 'abort'
@@ -1157,6 +1158,8 @@ def snapshots(regex=None, min_date=None, make_ami=False, yes=False):
                 # SriovNetSupport='simple', # probably want this in the future, enhanced io for current gen in vpc
             )['ImageId']
             print(name, id)
+    else:
+        return res
 
 def num_volumes(*tags, first_n=None, last_n=None, yes=False):
     assert tags, 'you must specify some tags'

@@ -228,10 +228,8 @@ def ssh(
         echo: 'echo some info about what was run on which hosts' = False,
         prefixed: 'when running against a single host, should streaming output be prefixed with name and ip' = False,
         failure_message: 'error message to print for a failed host' = '{name} {ip} {ipv4_private} failed'):
-    """
-    tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
-    no_tty is the opposite, which is good for backgrounding or nohuping processes.
-    """
+    # tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
+    # no_tty is the opposite, which is good for backgrounding or nohuping processes.
     assert tags, 'you must specify some tags'
     @_retry
     def f():
@@ -1066,8 +1064,12 @@ def user_data(*tags, first_n=None, last_n=None, yes=False):
     return '\n'.join(data)
 
 
+def _current_region():
+    return _client()._client_config.region_name
+
+
 def copy_image(source_region, image_id):
-    assert source_region != _client()._client_config.region_name, 'your source region is the same region as the current region: %s' % source_region
+    assert source_region != _current_region(), 'your source region is the same region as the current region: %s' % source_region
     with _region(source_region):
         image = _resource().Image(image_id)
     ami_id = _client().copy_image(SourceRegion=source_region,
@@ -1176,6 +1178,40 @@ def roles():
     for role in client.list_roles()['Roles']:
         if role['AssumeRolePolicyDocument']['Statement'] == [{'Action': 'sts:AssumeRole', 'Effect': 'Allow', 'Principal': {'Service': 'ec2.amazonaws.com'}}]:
             print(role['RoleName'])
+
+
+def graphs(*tags,
+           period: 'data sample window in seconds' = 60,
+           duration: '1H|2D|3W'='24H',
+           metric_type: 'cpu|disk|network' = 'cpu'):
+    # ec2 metrics http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/ec2-metricscollected.html
+    # all available metrics: aws cloudwatch list-metrics --namespace "AWS/EC2" --dimensions Name=InstanceId,Value=$(ec2 ls -s running|head -n1|awk '{print $4}') | jq .Metrics[].MetricName -r|sort|grep -v status -i
+    metrics = [
+        'CPUUtilization',
+        'DiskReadBytes',
+        'DiskReadOps',
+        # 'DiskWriteBytes', # wat. they are always zero?
+        # 'DiskWriteOps', # wat. they are always zero?
+        'NetworkIn',
+        'NetworkOut',
+        'NetworkPacketsIn',
+        'NetworkPacketsOut',
+    ]
+    region = _current_region()
+    instance_ids = [i.instance_id for i in _ls(tags, state='running')]
+    for metric in metrics:
+        if metric_type in metric.lower():
+            url = ""
+            url += "https://console.aws.amazon.com/cloudwatch/home?region={region}#metricsV2:graph=~(metrics~(".format(**locals())
+            instance_id = instance_ids[0]
+            url += "~(~'AWS*2fEC2~'{metric}~'InstanceId~'{instance_id}~(period~{period}))".format(**locals())
+            for instance_id in instance_ids[1:]:
+                url += "~(~'...~'{instance_id}~(period~{period}))".format(**locals())
+            url += ")~region~'{region}~start~'-PT{duration}~end~'P0D);namespace=AWS/EC2;dimensions=InstanceId".format(**locals())
+            try:
+                subprocess.check_call(['xdg-open', url]) # ubuntu
+            except:
+                subprocess.check_call(['open', url]) # macos
 
 
 def main():

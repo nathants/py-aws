@@ -1111,9 +1111,10 @@ def snapshots(regex=None, min_date=None, make_ami=False, yes=False):
         next_token = resp.get('NextToken')
         if not next_token:
             break
-    results = [x for x in results if '::' in x['Description']]
+    results = [x for x in results if 3 == len(x['Description'].split('::'))]
     results = [{'name': x['Description'].split('::')[0],
-                'date': x['Description'].split('::')[1],
+                'instance_id': x['Description'].split('::')[1],
+                'date': x['Description'].split('::')[2],
                 'state': x['State'],
                 'progress': x['Progress'],
                 'id': x['SnapshotId'],
@@ -1124,18 +1125,19 @@ def snapshots(regex=None, min_date=None, make_ami=False, yes=False):
         results = [x for x in results if re.search(regex, x['name'])]
     if min_date:
         results = [x for x in results if min_date <= x['date']]
-    results = util.iter.groupby(results, lambda x: x['name'])
+    results = util.iter.groupby(results, lambda x: x['instance_id'])
     results = [(k, sorted(v, key=lambda x: x['date'], reverse=True)) for k, v in results]
-    results = sorted(results, key=lambda x: util.iter.alphanumeric_key(x[0]))
     results = sorted(results, key=lambda x: x[1][0]['date'].split(':')[:-1], reverse=True)
+    results = sorted(results, key=lambda x: x[1][0]['name'])
     res = ''
     for k, vs in results:
         v = vs[0]
         res += ' '.join([
             '{%s' % v['name'],
+            '{[%s]' % v['instance_id'],
+            '{[%s]' % v['id'],
             '{[progress: %s]' % v['progress'] if v['state'] != 'completed' else '{[completed]',
             '{[%s]' % v['date'],
-            '{[%s]' % v['id'],
             '{[%sGB]' % v['size'],
             '{[versions: %s]' % len(vs)]) + '\n'
     res = util.strings.align(res, '{').splitlines()

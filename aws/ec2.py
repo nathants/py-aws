@@ -1182,7 +1182,7 @@ def roles():
 
 def graphs(*tags,
            period: 'data sample window in seconds' = 60,
-           duration: '1H|2D|3W'='24H',
+           duration: '1H|2D'='24H',
            metric_type: 'cpu|disk|network' = 'cpu'):
     # ec2 metrics http://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/ec2-metricscollected.html
     # all available metrics: aws cloudwatch list-metrics --namespace "AWS/EC2" --dimensions Name=InstanceId,Value=$(ec2 ls -s running|head -n1|awk '{print $4}') | jq .Metrics[].MetricName -r|sort|grep -v status -i

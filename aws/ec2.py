@@ -227,7 +227,7 @@ def ssh(
         key: 'speficy ssh key' = None,
         echo: 'echo some info about what was run on which hosts' = False,
         prefixed: 'when running against a single host, should streaming output be prefixed with name and ip' = False,
-        failure_message: 'error message to print for a failed host' = '{name} {ip} {ipv4_private} failed'):
+        failure_message: 'error message to print for a failed host, something like: {name} {ip} {ipv4_private} failed' = ''):
     # tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     # no_tty is the opposite, which is good for backgrounding or nohuping processes.
     assert tags, 'you must specify some tags'
@@ -737,14 +737,14 @@ ubuntus_pv = {'xenial': 'ubuntu/images/ebs-ssd/ubuntu-xenial-16.04-amd64-server'
 
 def amis_ubuntu(*name_fragments):
     name_fragments = ('ubuntu/images/',) + name_fragments
-    amis = list(_resource().images.filter(Owners=['099720109477'],
-                                          Filters=[{'Name': 'name',
-                                                    'Values': ['*%s*' % '*'.join(name_fragments)]},
-                                                   {'Name': 'architecture',
-                                                    'Values': ['x86_64']},
-                                                   # {'Name': 'virtualization-type',
-                                                   #  'Values': ['hvm']}
-                                                   ]))
+    amis = list(_retry(_resource().images.filter)(Owners=['099720109477'],
+                                                  Filters=[{'Name': 'name',
+                                                            'Values': ['*%s*' % '*'.join(name_fragments)]},
+                                                           {'Name': 'architecture',
+                                                            'Values': ['x86_64']},
+                                                           # {'Name': 'virtualization-type',
+                                                           #  'Values': ['hvm']}
+                                                           ]))
     vals = []
     for name, xs in util.iter.groupby(amis, key=lambda x: x.name.split('-')[:-1]):
         ami = sorted(xs, key=lambda x: x.creation_date)[-1]

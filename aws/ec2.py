@@ -229,7 +229,7 @@ def ssh(
         prefixed: 'when running against a single host, should streaming output be prefixed with name and ip' = False,
         failure_message: 'error message to print for a failed host, something like: {name} {ip} {ipv4_private} failed' = ''):
     # tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
-    # no_tty is the opposite, which is good for backgrounding or nohuping processes.
+    # no_tty is the opposite, which is good for backgrounding processes, for example: `ec2 ssh $host -nyc 'bash cmd.sh </dev/null &>cmd.log &'
     assert tags, 'you must specify some tags'
     @_retry
     def f():

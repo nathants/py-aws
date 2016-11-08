@@ -230,6 +230,7 @@ def ssh(
         failure_message: 'error message to print for a failed host, something like: {name} {ip} {ipv4_private} failed' = ''):
     # tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     # no_tty is the opposite, which is good for backgrounding processes, for example: `ec2 ssh $host -nyc 'bash cmd.sh </dev/null &>cmd.log &'
+    # TODO backgrounding appears to succeed, but ec2 ssh never exits, when targeting more than 1 host?
     assert tags, 'you must specify some tags'
     @_retry
     def f():
@@ -525,7 +526,12 @@ def _wait_for_ssh(*instances):
         start = time.time()
         try:
             assert len(running) == len(instances)
-            ssh(*[i.instance_id for i in running], cmd='whoami > /dev/null', yes=True, quiet=True, timeout=5)
+            ids = ' '.join([i.instance_id for i in running])
+            res = shell.run('ec2 ssh', ids, '-t 5 -yc "whoami>/dev/null" 2>&1', warn=True)
+            logging.info('waiting for %s nodes', [x.split()[-1]
+                                                  for x in res['output'].splitlines()
+                                                  if x.startswith(' failures: ')][0])
+            assert res['exitcode'] == 0
             return [i.public_dns_name for i in instances]
         except KeyboardInterrupt:
             raise

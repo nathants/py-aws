@@ -187,6 +187,10 @@ def _name_group(instance):
     return '%s:%s' % (_tags(instance).get('Name', '<no-name>'), instance.instance_id)
 
 
+def id(*tags, first_n=None, last_n=None):
+    return [i.instance_id for i in _ls(tags, 'running', first_n, last_n)]
+
+
 def ip(*tags, first_n=None, last_n=None):
     return [i.public_dns_name for i in _ls(tags, 'running', first_n, last_n)]
 
@@ -227,7 +231,7 @@ def ssh(
         key: 'speficy ssh key' = None,
         echo: 'echo some info about what was run on which hosts' = False,
         prefixed: 'when running against a single host, should streaming output be prefixed with name and ip' = False,
-        failure_message: 'error message to print for a failed host, something like: {name} {ip} {ipv4_private} failed' = ''):
+        error_message: 'error message to print for a failed host, something like: {name} {ip} {ipv4_private} failed' = ''):
     # tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     # no_tty is the opposite, which is good for backgrounding processes, for example: `ec2 ssh $host -nyc 'bash cmd.sh </dev/null &>cmd.log &'
     # TODO backgrounding appears to succeed, but ec2 ssh never exits, when targeting more than 1 host?
@@ -277,8 +281,8 @@ def ssh(
                                   stream=False,
                                   hide_stderr=quiet)
                     except:
-                        if failure_message:
-                            print(failure_message.format(ip=instance.public_dns_name,
+                        if error_message:
+                            print(error_message.format(ip=instance.public_dns_name,
                                                          ipv4_private=instance.private_ip_address,
                                                          name=_name(instance)),
                                   flush=True)

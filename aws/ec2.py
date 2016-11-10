@@ -188,7 +188,9 @@ def _name_group(instance):
 
 
 def id(*tags, first_n=None, last_n=None):
-    vals = [i.instance_id for i in _ls(tags, 'running', first_n, last_n)]
+    vals = _ls(tags, 'running', first_n, last_n)
+    vals = sorted(vals, key=lambda x: x.instance_id)
+    vals = [i.instance_id for i in vals]
     if not vals:
         sys.exit(1)
     else:
@@ -196,7 +198,9 @@ def id(*tags, first_n=None, last_n=None):
 
 
 def ip(*tags, first_n=None, last_n=None):
-    vals = [i.public_dns_name for i in _ls(tags, 'running', first_n, last_n)]
+    vals = _ls(tags, 'running', first_n, last_n)
+    vals = sorted(vals, key=lambda x: x.instance_id)
+    vals = [i.public_dns_name for i in vals]
     if not vals:
         sys.exit(1)
     else:
@@ -204,7 +208,9 @@ def ip(*tags, first_n=None, last_n=None):
 
 
 def ip_private(*tags, first_n=None, last_n=None):
-    vals = [i.private_dns_name for i in _ls(tags, 'running', first_n, last_n)]
+    vals = _ls(tags, 'running', first_n, last_n)
+    vals = sorted(vals, key=lambda x: x.instance_id)
+    vals = [i.private_dns_name for i in vals]
     if not vals:
         sys.exit(1)
     else:
@@ -212,7 +218,9 @@ def ip_private(*tags, first_n=None, last_n=None):
 
 
 def ipv4_private(*tags, first_n=None, last_n=None):
-    vals = [i.private_ip_address for i in _ls(tags, 'running', first_n, last_n)]
+    vals = _ls(tags, 'running', first_n, last_n)
+    vals = sorted(vals, key=lambda x: x.instance_id)
+    vals = [i.private_ip_address for i in vals]
     if not vals:
         sys.exit(1)
     else:

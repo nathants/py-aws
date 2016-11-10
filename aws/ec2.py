@@ -188,19 +188,35 @@ def _name_group(instance):
 
 
 def id(*tags, first_n=None, last_n=None):
-    return [i.instance_id for i in _ls(tags, 'running', first_n, last_n)]
+    vals = [i.instance_id for i in _ls(tags, 'running', first_n, last_n)]
+    if not vals:
+        sys.exit(1)
+    else:
+        return vals
 
 
 def ip(*tags, first_n=None, last_n=None):
-    return [i.public_dns_name for i in _ls(tags, 'running', first_n, last_n)]
+    vals = [i.public_dns_name for i in _ls(tags, 'running', first_n, last_n)]
+    if not vals:
+        sys.exit(1)
+    else:
+        return vals
 
 
 def ip_private(*tags, first_n=None, last_n=None):
-    return [i.private_dns_name for i in _ls(tags, 'running', first_n, last_n)]
+    vals = [i.private_dns_name for i in _ls(tags, 'running', first_n, last_n)]
+    if not vals:
+        sys.exit(1)
+    else:
+        return vals
 
 
 def ipv4_private(*tags, first_n=None, last_n=None):
-    return [i.private_ip_address for i in _ls(tags, 'running', first_n, last_n)]
+    vals = [i.private_ip_address for i in _ls(tags, 'running', first_n, last_n)]
+    if not vals:
+        sys.exit(1)
+    else:
+        return vals
 
 
 def ls(*tags, state='all', first_n=None, last_n=None, all_tags=False):

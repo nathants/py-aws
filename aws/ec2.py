@@ -269,6 +269,8 @@ def ssh(
     if os.path.exists(cmd):
         with open(cmd) as f:
             cmd = f.read()
+    if cmd == '-':
+        cmd = sys.stdin.read()
     if cmd and 'set -e' not in cmd:
         if cmd.startswith('#!'):
             lines = cmd.splitlines()
@@ -547,8 +549,22 @@ def _wait_for_state(state, *instances_or_instance_ids):
     assert False, 'failed to wait for %(state)s for instances %(ids)s' % locals()
 
 
+def wait_for_ssh(*tags, yes=False, first_n=None, last_n=None):
+    assert tags, 'you cannot wait for all things, specify some tags'
+    instances = _ls(tags, ['running', 'pending'], first_n, last_n)
+    assert instances, 'didnt find any instances for those tags'
+    logging.info('going to wait for ssh on the following instances:')
+    for i in instances:
+        logging.info(' ' + _pretty(i))
+    if is_cli and not yes:
+        logging.info('\nwould you like to proceed? y/n\n')
+        assert pager.getch() == 'y', 'abort'
+    _wait_for_ssh(*instances)
+
+
 def _wait_for_ssh(*instances):
     logging.info('wait for ssh...')
+    success = False
     for _ in range(200):
         running = _ls([i.id for i in instances], state='running')
         start = time.time()
@@ -556,11 +572,16 @@ def _wait_for_ssh(*instances):
             assert len(running) == len(instances)
             ids = ' '.join([i.instance_id for i in running])
             res = shell.run('ec2 ssh', ids, '-t 5 -yc "whoami>/dev/null" 2>&1', warn=True)
-            logging.info('waiting for %s nodes', [x.split()[-1]
-                                                  for x in res['output'].splitlines()
-                                                  if x.startswith(' failures: ')][0])
+            try:
+                logging.info('waiting for %s nodes', [x.split()[-1]
+                                                      for x in res['output'].splitlines()
+                                                      if x.startswith(' failures: ')][0])
+            except IndexError: # no more failures
+                if not success:
+                    logging.info('waiting for 0 nodes') # why would this get hit multiple times? returning i.public_dns excepts?
+                success = True
             assert res['exitcode'] == 0
-            return [i.public_dns_name for i in instances]
+            return [i.public_dns_name for i in running]
         except KeyboardInterrupt:
             raise
         except:
@@ -748,17 +769,23 @@ def amis_fuzzy(*name_fragments):
         print('%s %s' % (util.colors.green(ami.image_id), ami.name))
 
 
-def amis(name):
+def amis(name, id_only=False, most_recent=False):
     amis = _resource().images.filter(Owners=['self'],
                                      Filters=[{'Name': 'name',
                                                'Values': ['*%s*' % name]},
                                               {'Name': 'state',
                                                'Values': ['available']}])
-    amis = [x for x in amis
-            if x.name.split('__')[0] == name]
+    amis = [x for x in amis if x.name.split('__')[0] == name]
+    if not amis:
+        logging.info('no amis matched name: %s', name)
+        sys.exit(1)
     amis = sorted(amis, key=lambda x: x.creation_date, reverse=True)
-    for ami in amis:
-        print(' '.join([util.colors.green(ami.image_id)] + ami.name.split('__')))
+    if most_recent:
+        amis = amis[:1]
+    if id_only:
+        return [ami.image_id for ami in amis]
+    else:
+        return [' '.join([ami.image_id, ami.name.split('__')[-1]]) for ami in amis]
 
 
 # TODO something better
@@ -904,9 +931,13 @@ def new(name:  'name of the instance',
         images = ubuntus_pv if type.split('.')[0] in ['t1', 'm1'] else ubuntus_hvm_ssd
         ami, _ = [x for x in amis_ubuntu() if images[distro] in x][0].split()
         logging.info('using ami ubuntu:%s %s', distro, ami)
-    else:
+    elif ami.startswith('ami-'):
         ami = ami.strip()
         logging.info('using ami: %s', ami)
+    else:
+        name = ami
+        ami = amis(ami, id_only=True, most_recent=True)[0]
+        logging.info('using most recent ami for name: %s %s', name, ami)
     opts = {}
     opts['UserData'] = init
     opts['ImageId'] = ami

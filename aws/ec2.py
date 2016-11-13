@@ -769,15 +769,20 @@ def amis_fuzzy(*name_fragments):
         print('%s %s' % (util.colors.green(ami.image_id), ami.name))
 
 
-def amis(name, id_only=False, most_recent=False):
+def amis(name, *tags, id_only=False, most_recent=False):
+    assert len(tags) in [0, 1], 'only one tag currently supported'
+    if tags:
+        tag_filter = [{'Name': 'tag:' + tags[0].split('=')[0], 'Values': [tags[0].split('=')[1]]}]
+    else:
+        tag_filter = []
     amis = _resource().images.filter(Owners=['self'],
                                      Filters=[{'Name': 'name',
                                                'Values': ['*%s*' % name]},
                                               {'Name': 'state',
-                                               'Values': ['available']}])
+                                               'Values': ['available']}] + tag_filter)
     amis = [x for x in amis if x.name.split('__')[0] == name]
     if not amis:
-        logging.info('no amis matched name: %s', name)
+        logging.info('no amis matched name: %s %s', name, tags[0] if tags else '')
         sys.exit(1)
     amis = sorted(amis, key=lambda x: x.creation_date, reverse=True)
     if most_recent:
@@ -787,8 +792,10 @@ def amis(name, id_only=False, most_recent=False):
     else:
         def f(ami):
             name, date = ami.name.split('__')
-            description = ami.description if ami.description != name else ''
-            return ' '.join([ami.image_id, date, description])
+            description = ami.description if ami.description != name else '-'
+            tag = '%(Key)s=%(Value)s' % ami.tags[0] if ami.tags else '-'
+            return ' '.join([ami.image_id, date, description, tag])
+        logging.info('id date description tag')
         return [f(ami) for ami in amis]
 
 
@@ -1121,7 +1128,7 @@ def start(*tags, yes=False, first_n=None, last_n=None, login=False, wait=False):
             i.wait_until_running()
 
 
-def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, description=None, no_append_date=False):
+def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, description=None, no_append_date=False, tag=None):
     assert name, 'you must provide a name'
     assert '__' not in name, 'you cannot use "__" in a name'
     if not description:
@@ -1140,7 +1147,9 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     image = instance.create_image(Name=name, Description=description)
-    # TODO tagging? description vs name is enough?
+    if tag:
+        key, value = tag.split('=')
+        image.create_tag(Tags=[{'Key': key, 'Value': value}])
     ami_id = image.image_id
     if not no_wait:
         logging.info('wait for image...')

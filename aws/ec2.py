@@ -963,7 +963,7 @@ def new(name:  'name of the instance',
 
     for _ in range(5):
         if spot and zone is None:
-            zone, _, _ = cheapest_zone(type, kind='vpc' if vpc else 'classic')
+            zone, _, = cheapest_zone(type, kind='vpc' if vpc else 'classic')
         if zone:
             opts['Placement'] = {'AvailabilityZone': zone}
         if vpc:
@@ -1037,28 +1037,41 @@ def zones():
     return [x['ZoneName'] for x in _client().describe_availability_zones()['AvailabilityZones']]
 
 
-def max_spot_price(type, kind=None):
-    kinds = [('classic', 'Linux/UNIX'),
-             ('vpc', 'Linux/UNIX (Amazon VPC)')]
-    return json.dumps({zone: {name: max(float(x['SpotPrice'])
-                                        for x in _client().describe_spot_price_history(
-                                            InstanceTypes=[type],
-                                            ProductDescriptions=[_kind],
-                                            AvailabilityZone=zone)['SpotPriceHistory'] or [{'SpotPrice': 100.0}])
-                              for name, _kind in kinds
-                              if kind is None or name == kind}
+_kinds = {'classic': 'Linux/UNIX',
+          'vpc': 'Linux/UNIX (Amazon VPC)'}
+
+
+# TODO should cache this locally on disk. historical data wont change.
+def _spot_price_history(type, kind, zone, days=7):
+    assert kind in _kinds, _kinds
+    token = ''
+    results = []
+    while True:
+        res = _client().describe_spot_price_history(
+            NextToken=token,
+            StartTime=datetime.datetime.utcnow() - datetime.timedelta(days=days),
+            EndTime=datetime.datetime.utcnow(),
+            InstanceTypes=[type],
+            ProductDescriptions=[_kinds[kind]],
+            AvailabilityZone=zone)
+        results.extend(res['SpotPriceHistory'])
+        if res['NextToken']:
+            token = res['NextToken']
+        else:
+            return [float(x['SpotPrice']) for x in results or [{'SpotPrice': 100.0}]]
+
+
+def max_spot_price(type, kind: 'classic|vpc' = 'classic', days=7):
+    return json.dumps({zone: max(_spot_price_history(type, kind, zone, days))
                        for zone in zones()})
 
 
-def cheapest_zone(type, kind=None):
-    res = json.loads(max_spot_price(type, kind))
-    res = [(zone, _kind, price)
-           for zone, xs in res.items()
-           for _kind, price in xs.items()
-           if kind is None or kind == _kind]
-    zone, kind, price = res[0]
+def cheapest_zone(type, kind: 'classic|vpc' = 'classic', days=7):
+    res = json.loads(max_spot_price(type, kind, days))
+    res = sorted(res.items(), key=lambda x: x[-1])
+    zone, price = res[0]
     logging.info('cheapest price: %s', price)
-    return [zone, kind, price]
+    return [zone, price]
 
 
 def start(*tags, yes=False, first_n=None, last_n=None, login=False, wait=False):

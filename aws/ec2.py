@@ -1149,7 +1149,7 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
     image = instance.create_image(Name=name, Description=description)
     if tag:
         key, value = tag.split('=')
-        image.create_tag(Tags=[{'Key': key, 'Value': value}])
+        image.create_tags(Tags=[{'Key': key, 'Value': value}])
     ami_id = image.image_id
     if not no_wait:
         logging.info('wait for image...')

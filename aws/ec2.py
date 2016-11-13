@@ -1041,16 +1041,28 @@ _kinds = {'classic': 'Linux/UNIX',
           'vpc': 'Linux/UNIX (Amazon VPC)'}
 
 
-# TODO should cache this locally on disk. historical data wont change.
-def _spot_price_history(type, kind, zone, days=7):
+def _chunk_by_day(days=7):
+    now_end = datetime.datetime.utcnow().replace(second=0, microsecond=0)
+    now_start = now_end.replace(hour=0, minute=0)
+    start = now_start - datetime.timedelta(days=days)
+    f = lambda x: x.isoformat() + 'Z'
+    for i in range(days):
+        s = start + datetime.timedelta(days=i)
+        e = start + datetime.timedelta(days=i + 1)
+        yield [f(s), f(e)]
+    yield [f(now_start), f(now_end)]
+
+
+@util.cached.disk_memoize(False)
+def _spot_price(type, kind, zone, start, end):
     assert kind in _kinds, _kinds
     token = ''
     results = []
     while True:
         res = _client().describe_spot_price_history(
             NextToken=token,
-            StartTime=datetime.datetime.utcnow() - datetime.timedelta(days=days),
-            EndTime=datetime.datetime.utcnow(),
+            StartTime=start,
+            EndTime=end,
             InstanceTypes=[type],
             ProductDescriptions=[_kinds[kind]],
             AvailabilityZone=zone)
@@ -1059,6 +1071,11 @@ def _spot_price_history(type, kind, zone, days=7):
             token = res['NextToken']
         else:
             return [float(x['SpotPrice']) for x in results or [{'SpotPrice': 100.0}]]
+
+
+def _spot_price_history(type, kind, zone, days=7):
+    for start, end in _chunk_by_day(days):
+        yield from _spot_price(type, kind, zone, start, end)
 
 
 def max_spot_price(type, kind: 'classic|vpc' = 'classic', days=7):

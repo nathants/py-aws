@@ -785,7 +785,11 @@ def amis(name, id_only=False, most_recent=False):
     if id_only:
         return [ami.image_id for ami in amis]
     else:
-        return [' '.join([ami.image_id, ami.name.split('__')[-1]]) for ami in amis]
+        def f(ami):
+            name, date = ami.name.split('__')
+            description = ami.description if ami.description != name else ''
+            return ' '.join([ami.image_id, date, description])
+        return [f(ami) for ami in amis]
 
 
 # TODO something better
@@ -1135,7 +1139,9 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
     if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-    ami_id = instance.create_image(Name=name, Description=description).image_id
+    image = instance.create_image(Name=name, Description=description)
+    # TODO tagging? description vs name is enough?
+    ami_id = image.image_id
     if not no_wait:
         logging.info('wait for image...')
         # TODO this appears to wait way longer than necessary. instead, wait until ami-id appears in amis(name)

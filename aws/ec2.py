@@ -1159,6 +1159,20 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
     return ami_id
 
 
+def spot_requests(*ids, state: 'open | active | closed | cancelled | failed' = None):
+    resp = _client().describe_spot_instance_requests(
+        SpotInstanceRequestIds=ids,
+        Filters=([{'Name': 'state', 'Values': [state]}] if state else [])
+    )['SpotInstanceRequests']
+    return [{'instance-id': r.get('InstanceId'),
+             'date': r['CreateTime'].isoformat()[:-6],
+             'state': r['State'],
+             'status': r['Status']['Code'],
+             'type': r['LaunchSpecification']['InstanceType'],
+             'ami': r['LaunchSpecification']['ImageId']}
+            for r in sorted(resp, key=lambda x: x['CreateTime'], reverse=True)]
+
+
 def user_data(*tags, first_n=None, last_n=None, yes=False):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'all', first_n, last_n)

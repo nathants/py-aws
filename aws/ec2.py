@@ -708,6 +708,36 @@ def _sgs(names=None):
     return sgs
 
 
+def sg_dump(sort: 'id | 0 | 32' = 'id', check_num_instances=False):
+    logging.info('source num-instances destination protocol:from-port:to-port')
+    vals = []
+    for sg in _sgs():
+            src = '%s:%s' % (sg.group_id, getattr(sg, 'group_name', None) or getattr(sg, 'description', '<no-name>'))
+            src = src.replace(' ', '_')
+            if check_num_instances:
+                num = len(_ls([sg.group_id], state='running'))
+            else:
+                num = '?'
+            for key in ['ip_permissions_egress', 'ip_permissions']:
+                for x in getattr(sg, key):
+                    for dst in [cidr['CidrIp'] for cidr in x['IpRanges']] + ['%s:%s' % (group['GroupId'], group.get('GroupName', '<no-name>')) for group in x['UserIdGroupPairs']]:
+                        dst = dst.replace(' ', '_')
+                        vals.append(
+                            '{} {} {} {}'.format(src, num, dst, ' %(IpProtocol)s:%(FromPort)s:%(ToPort)s' % x
+                                                                if 'FromPort' in x else
+                                                                ' Any:Any:Any').replace(':-1', ':Any'))
+    if sort != 'id':
+        assert sort in ['0', '32']
+        if sort == '0':
+            vals = sorted(vals, key=lambda x: x.split()[2].endswith('/32'), reverse=True)
+            vals = sorted(vals, key=lambda x: x.split()[2].endswith('/0'), reverse=True)
+        else:
+            vals = sorted(vals, key=lambda x: x.split()[2].endswith('/0'), reverse=True)
+            vals = sorted(vals, key=lambda x: x.split()[2].endswith('/32'), reverse=True)
+    for val in vals:
+        print(val)
+
+
 def authorize(ip, *names, yes=False):
     assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
     names = [util.strings.rm_color(x) for x in names]

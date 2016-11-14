@@ -734,6 +734,8 @@ def sg_dump(sort: 'id | 0 | 32' = 'id', check_num_instances=False):
         else:
             vals = sorted(vals, key=lambda x: x.split()[2].endswith('/0'), reverse=True)
             vals = sorted(vals, key=lambda x: x.split()[2].endswith('/32'), reverse=True)
+    if check_num_instances:
+        vals = sorted(vals, key=lambda x: int(x.split()[1]), reverse=True)
     for val in vals:
         print(val)
 

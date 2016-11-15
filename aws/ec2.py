@@ -1,4 +1,5 @@
 import argh
+import pytz
 import boto3
 import json
 import contextlib
@@ -1072,17 +1073,19 @@ def new(name:  'name of the instance',
     logging.info('done')
     return [i.instance_id for i in instances]
 
-
+# TODO this can probably be cached for some time period
 def regions():
     return [x['RegionName'] for x in _client().describe_regions()['Regions']]
 
-
+# TODO this can probably be cached for some time period
 def zones():
     return [x['ZoneName'] for x in _client().describe_availability_zones()['AvailabilityZones']]
 
 
 _kinds = {'classic': 'Linux/UNIX',
           'vpc': 'Linux/UNIX (Amazon VPC)'}
+
+_kinds_reverse = {v: k for k, v in _kinds.items()}
 
 
 def _chunk_by_day(days=7):
@@ -1097,40 +1100,100 @@ def _chunk_by_day(days=7):
     yield [f(now_start), f(now_end)]
 
 
-@util.cached.disk_memoize(False)
-def _spot_price(type, kind, zone, start, end):
-    assert kind in _kinds, _kinds
+def _spot_price_cache_path(type, kind, start, end):
+    start = start.split('T')[0]
+    end = end.split('T')[0]
+    return '/tmp/cache.py-aws.spot-price.%(type)s.%(kind)s.%(start)s.%(end)s.json' % locals()
+
+
+def _spot_price_history(type, kind, days=7):
+    # TODO this could be more clever. currently, it only reads cached
+    # data if the oldests requested day is already cached, otherwise
+    # it refetches everything. this is simpler, but more ideal would
+    # be to load a large chunk of cached days in the middle of a date
+    # range, and then make two fetches, for dates before and after the
+    # cached range. the assumption is that when used frequently, there
+    # will always be cached historical data, and so this model will be
+    # fine.
+    assert kind in _kinds
+    dates = list(_chunk_by_day(days))
+    cacheable_dates = dates[:-1] # everything but the latest is a 24hr period
+    cached_dates = []
+    for start, end in cacheable_dates:
+        if os.path.exists(_spot_price_cache_path(type, kind, start, end)):
+            cached_dates.append([start, end])
+        else:
+            break
+    uncached_dates = dates[len(cached_dates):]
+    logging.debug('dates:\n %s', '\n '.join(map(str, dates)))
+    logging.debug('cacheable:\n %s', '\n '.join(map(str, cacheable_dates)))
+    logging.debug('cached dates:\n %s', '\n '.join(map(str, cached_dates)))
+    logging.debug('uncached dates:\n %s', '\n '.join(map(str, uncached_dates)))
+    if cached_dates:
+        logging.debug('spot prices cached:   %s to %s.', cached_dates[0][0], cached_dates[-1][1])
+        logging.debug('spot prices uncached: %s to %s', uncached_dates[0][0], uncached_dates[-1][1])
+    else:
+        logging.debug('spot prices uncached')
+    cached_data = []
+    for start, end in cached_dates:
+        try:
+            logging.debug('read cached data for %s %s %s %s', type, kind, start, end)
+            with open(_spot_price_cache_path(type, kind, start, end)) as f:
+                cached_data.extend(json.load(f))
+        except (IOError, ValueError):
+            logging.debug('failed to load spot price cache, refetching everything')
+            cached_data = []
+            uncached_dates = dates
+            break
+    start = uncached_dates[0][0]
+    end = uncached_dates[-1][1]
+    data = list(_get_spot_price(type, kind, start, end))
+    for k, v in util.iter.groupby(data, lambda x: x['date'].split('T')[0]):
+        start = datetime.datetime.strptime(k, "%Y-%m-%d")
+        end = (start + datetime.timedelta(days=1)).isoformat() + 'Z'
+        start = start.isoformat() + 'Z'
+        if any([start, end] == x for x in cacheable_dates) and not any([start, end] == x for x in cached_dates):
+            with open(_spot_price_cache_path(type, kind, start, end), 'w') as f:
+                json.dump(v, f)
+            logging.debug('write cache data for %s %s %s %s', type, kind, start, end)
+    return cached_data + data
+
+
+def _get_spot_price(type, kind, start, end):
     token = ''
-    results = []
+    logging.info('get spot prices: %s %s from %s to %s', type, kind, start, end)
+    assert start < end
+    total = 0
     while True:
         res = _client().describe_spot_price_history(
             NextToken=token,
             StartTime=start,
             EndTime=end,
             InstanceTypes=[type],
-            ProductDescriptions=[_kinds[kind]],
-            AvailabilityZone=zone)
-        results.extend(res['SpotPriceHistory'])
+            ProductDescriptions=[_kinds[kind]])
+        result = [{'zone': x['AvailabilityZone'],
+                   'price': x['SpotPrice'],
+                   'date': x['Timestamp'].isoformat().split('+')[0] + 'Z'}
+                  for x in res['SpotPriceHistory']]
+        total += len(result)
+        yield from result
         if res['NextToken']:
+            logging.info('check next token for more results. total so far: %s', total)
             token = res['NextToken']
         else:
-            return [float(x['SpotPrice']) for x in results or [{'SpotPrice': 100.0}]]
-
-
-def _spot_price_history(type, kind, zone, days=7):
-    for start, end in _chunk_by_day(days):
-        yield from _spot_price(type, kind, zone, start, end)
-
+            break
 
 def max_spot_price(type, kind: 'classic|vpc' = 'classic', days=7):
-    return json.dumps({zone: max(_spot_price_history(type, kind, zone, days))
-                       for zone in zones()})
+    vals = _spot_price_history(type, kind, days)
+    results = []
+    for zone, xs in util.iter.groupby(vals, lambda x: x['zone']):
+        results.append([zone, max([x['price'] for x in xs])])
+    results = sorted(results, key=lambda x: float(x[1]))
+    return [' '.join(x) for x in results]
 
 
-def cheapest_zone(type, kind: 'classic|vpc' = 'classic', days=7):
-    res = json.loads(max_spot_price(type, kind, days))
-    res = sorted(res.items(), key=lambda x: x[-1])
-    zone, price = res[0]
+def cheapest_zone(type, kind: 'classic | vpc' = 'classic', days=7):
+    zone, price = max_spot_price(type, kind, days)[0].split()
     logging.info('cheapest price: %s', price)
     return [zone, price]
 

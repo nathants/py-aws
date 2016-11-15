@@ -1115,6 +1115,13 @@ def _spot_price_history(type, kind, days=7):
     # cached range. the assumption is that when used frequently, there
     # will always be cached historical data, and so this model will be
     # fine.
+
+    # TODO may even be worth reverting to older, simpler behavior,
+    # which is cache free, but way simpler. it could also be slightly
+    # faster by gather all zone data in a single request cycle,
+    # instead of seperate cycles.
+    # https://github.com/nathants/py-aws/blob/83bf766/aws/ec2.py#L1040
+
     assert kind in _kinds
     dates = list(_chunk_by_day(days))
     cacheable_dates = dates[:-1] # everything but the latest is a 24hr period

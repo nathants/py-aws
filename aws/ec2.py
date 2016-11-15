@@ -1,5 +1,4 @@
 import argh
-import pytz
 import boto3
 import json
 import contextlib

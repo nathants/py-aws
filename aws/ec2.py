@@ -309,12 +309,15 @@ def ssh(
                     except:
                         if error_message:
                             print(error_message.format(ip=instance.public_dns_name,
-                                                         ipv4_private=instance.private_ip_address,
-                                                         name=_name(instance)),
+                                                       ipv4_private=instance.private_ip_address,
+                                                       name=_name(instance)),
                                   flush=True)
-                        failures.append(util.colors.red('failure: ') + _name(instance) + ': ' + instance.public_dns_name)
+                        msg = util.colors.red('failure: ') + _name(instance) + ': ' + instance.public_dns_name
+                        failures.append(msg)
                     else:
-                        successes.append(util.colors.green('success: ') + _name(instance) + ': ' + instance.public_dns_name)
+                        msg = util.colors.green('success: ') + _name(instance) + ': ' + instance.public_dns_name
+                        successes.append(msg)
+                    logging.info(msg)
                 return fn
             pool.thread.wait(*map(run, instances), max_threads=max_threads)
             # TODO would be really nice to see these results, plus unknowns:, when ^C to exit early

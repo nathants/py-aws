@@ -75,6 +75,7 @@ def _tags(instance):
 
 @_retry
 def _ls(tags, state='running', first_n=None, last_n=None):
+    state = state.lower()
     if isinstance(state, str):
         assert state in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + state
         state = [state]
@@ -628,6 +629,7 @@ def tag(ls_tags, set_tags, yes=False, first_n=None, last_n=None):
 
 
 def wait(*tags, state='running', yes=False, first_n=None, last_n=None, ssh=False):
+    state = state.lower()
     assert state in ['running', 'stopped']
     assert tags, 'you cannot wait for all things, specify some tags'
     instances = _ls(tags, 'all', first_n, last_n)

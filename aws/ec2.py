@@ -1446,6 +1446,22 @@ def graphs(*tags,
                 subprocess.check_call(['open', url]) # macos
 
 
+def scheduled_events():
+    logging.info('instance-name instance-id event:date,...')
+    xs = _client().describe_instance_status()['InstanceStatuses']
+    xs = [x for x in xs if x.get('Events')]
+    xs = [' '.join([_name(_ls([x['InstanceId']])[0]),
+                    x['InstanceId'],
+                    ','.join([y['Code'] + ':' +
+                              y['NotBefore'].isoformat().split('T')[0]
+                              for y in x['Events']])])
+          for x in xs]
+    if xs:
+        return xs
+    else:
+        sys.exit(1)
+
+
 def main():
     globals()['is_cli'] = True
     shell.ignore_closed_pipes()

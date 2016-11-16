@@ -1,4 +1,3 @@
-import argh
 import boto3
 import json
 import contextlib
@@ -1005,9 +1004,9 @@ def new(name:  'name of the instance',
     # the good ones, and start over for only as many new ones as we
     # need to fulfill the originally requested number.
 
+    if spot and zone is None:
+        zone, _, = cheapest_zone(type, kind='vpc' if vpc else 'classic')
     for _ in range(5):
-        if spot and zone is None:
-            zone, _, = cheapest_zone(type, kind='vpc' if vpc else 'classic')
         if zone:
             opts['Placement'] = {'AvailabilityZone': zone}
         if vpc:
@@ -1162,6 +1161,9 @@ def _spot_price_history(type, kind, days=7):
             with open(_spot_price_cache_path(type, kind, start, end), 'w') as f:
                 json.dump(v, f)
             logging.debug('write cache data for %s %s %s %s', type, kind, start, end)
+    # TODO add some cache data gc. cleanup say, older than 90 days?
+    # files aren't that big, but boxes that dont reboot will
+    # eventually will /tmp.
     return cached_data + data
 
 

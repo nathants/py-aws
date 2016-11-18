@@ -317,7 +317,8 @@ def ssh(
                     else:
                         msg = util.colors.green('success: ') + _name(instance) + ': ' + instance.public_dns_name
                         successes.append(msg)
-                    logging.info(msg)
+                    if not quiet:
+                        logging.info(msg)
                 return fn
             pool.thread.wait(*map(run, instances), max_threads=max_threads)
             # TODO would be really nice to see these results, plus unknowns:, when ^C to exit early

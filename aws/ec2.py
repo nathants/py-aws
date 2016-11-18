@@ -75,11 +75,12 @@ def _tags(instance):
 
 @_retry
 def _ls(tags, state='running', first_n=None, last_n=None):
-    state = state.lower()
     if isinstance(state, str):
+        stat = state.lower()
         assert state in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + state
         state = [state]
     else:
+        state = [s.lower() for s in state]
         for s in state:
             assert s in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + s
     is_dns_name = tags and tags[0].endswith('.amazonaws.com')

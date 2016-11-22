@@ -208,6 +208,16 @@ def ip(*tags, first_n=None, last_n=None):
         return vals
 
 
+def ipv4(*tags, first_n=None, last_n=None):
+    vals = _ls(tags, 'running', first_n, last_n)
+    vals = sorted(vals, key=lambda x: x.instance_id)
+    vals = [i.public_ip_address for i in vals]
+    if not vals:
+        sys.exit(1)
+    else:
+        return vals
+
+
 def ip_private(*tags, first_n=None, last_n=None):
     vals = _ls(tags, 'running', first_n, last_n)
     vals = sorted(vals, key=lambda x: x.instance_id)

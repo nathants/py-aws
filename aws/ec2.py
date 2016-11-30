@@ -1,4 +1,5 @@
 import boto3
+import collections
 import json
 import contextlib
 import datetime
@@ -239,13 +240,12 @@ def ipv4_private(*tags, first_n=None, last_n=None):
 
 
 def ls(*tags, state='all', first_n=None, last_n=None, all_tags=False):
-    x = _ls(tags, state, first_n, last_n)
-    x = map(lambda y: _pretty(y, all_tags=all_tags), x)
-    x = '\n'.join(x)
-    if not x:
+    xs = _ls(tags, state, first_n, last_n)
+    xs = list(map(lambda y: _pretty(y, all_tags=all_tags), xs))
+    if not xs:
         sys.exit(1)
     else:
-        print(x, flush=True)
+        return xs
 
 
 def _remote_cmd(cmd, address):
@@ -1477,6 +1477,22 @@ def scheduled_events():
         return xs
     else:
         sys.exit(1)
+
+
+def reserved_usage():
+    # note: assumes all m1, m2, m3 et all are in ec2 classic, and all m4 et all are in vpc.
+    reserved = _client().describe_reserved_instances(Filters=[{'Name': 'state', 'Values': ['active']}])['ReservedInstances']
+    assert all(x['Scope'] == 'Region' for x in reserved), 'only scope=region supported'
+    reserved = [{'kind': _kinds_reverse[x['ProductDescription']],
+                 'type': x['InstanceType'],
+                 'num': x['InstanceCount']}
+                for x in reserved]
+    reserved = collections.Counter(x['type'] for x in reserved for _ in range(x['num']))
+    actual = collections.Counter([y.instance_type for y in _ls([], state='running')])
+    usage = {k: reserved[k] - actual[k] for k in reserved}
+    logging.info('positive number means some reservations are unused')
+    logging.info('negative number means there are instances which could be reserved')
+    return json.dumps(usage, indent=4)
 
 
 def main():

@@ -995,9 +995,9 @@ def new(name:  'name of the instance',
         ami = ami.strip()
         logging.info('using ami: %s', ami)
     else:
-        name = ami
+        ami_name = ami
         ami = amis(ami, id_only=True, most_recent=True)[0]
-        logging.info('using most recent ami for name: %s %s', name, ami)
+        logging.info('using most recent ami for name: %s %s', ami_name, ami)
     opts = {}
     opts['UserData'] = init
     opts['ImageId'] = ami

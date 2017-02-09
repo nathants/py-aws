@@ -1212,7 +1212,8 @@ def max_spot_price(type, kind: 'classic|vpc' = 'classic', days=7):
     vals = _spot_price_history(type, kind, days)
     results = []
     for zone, xs in util.iter.groupby(vals, lambda x: x['zone']):
-        results.append([zone, max([x['price'] for x in xs])])
+        if zone.startswith(_current_region()):
+            results.append([zone, max([x['price'] for x in xs])])
     results = sorted(results, key=lambda x: float(x[1]))
     return [' '.join(x) for x in results]
 

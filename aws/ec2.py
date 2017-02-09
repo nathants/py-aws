@@ -940,8 +940,14 @@ def _create_spot_instances(**opts):
         raise
     else:
         instance_ids = [x['InstanceId'] for x in xs]
-        instances = _ls(instance_ids, state='all')
-        return instances
+        for _ in range(5):
+            instances = _ls(instance_ids, state='all')
+            if len(instances) == len(instance_ids):
+                return instances
+            time.sleep(5)
+        raise Exception('failed to get the right number of instances')
+
+
 
 
 def _make_spot_opts(spot, opts):

@@ -1076,10 +1076,16 @@ def new(name:  'name of the instance',
                 ready_ids = _wait_for_ssh(*instances, seconds=seconds)
                 break
             except KeyboardInterrupt:
-                rm(*[i.instance_id for i in instances], yes=True)
+                try:
+                    rm(*[i.instance_id for i in instances], yes=True)
+                except AssertionError:
+                    pass # when $seconds, and no instances where ready, everything has already been terminated, and rm fails an assert
                 raise
             except:
-                rm(*[i.instance_id for i in instances], yes=True)
+                try:
+                    rm(*[i.instance_id for i in instances], yes=True)
+                except AssertionError:
+                    pass # when $seconds, and no instances where ready, everything has already been terminated, and rm fails an assert
                 logging.exception('failed to spinup and then wait for ssh on instances, retrying...')
     else:
         assert False, 'failed to spinup and then wait for ssh on instances after 5 tries. aborting.'

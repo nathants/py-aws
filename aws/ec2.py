@@ -265,6 +265,7 @@ def ssh(
         user: 'specify ssh user' = 'ubuntu',
         key: 'speficy ssh key' = None,
         echo: 'echo some info about what was run on which hosts' = False,
+        force_batch_mode: 'operate like there are many instances, even if only one' = False,
         prefixed: 'when running against a single host, should streaming output be prefixed with name and ip' = False,
         error_message: 'error message to print for a failed host, something like: {id} {name} {ip} {ipv4_private} failed' = ''):
     # tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
@@ -304,7 +305,7 @@ def ssh(
         assert pager.getch() == 'y', 'abort'
     # TODO have a --stream-only to not accumulate lines for return, here, or in shell.run
     try:
-        if cmd and len(instances) > 1:
+        if cmd and len(instances) > 1 or force_batch_mode:
             failures = []
             successes = []
             results = []
@@ -588,7 +589,7 @@ def _wait_for_ssh(*instances, seconds=0):
         try:
             assert len(running) == len(instances)
             ids = ' '.join([i.instance_id for i in running])
-            res = shell.run('ec2 ssh', ids, '-t 5 -yc "whoami>/dev/null" 2>&1', warn=True)
+            res = shell.run('ec2 ssh', ids, '--force-batch-mode -t 5 -yc "whoami>/dev/null" 2>&1', warn=True)
             ready_ids = [x.split()[-1]
                          for x in res['output'].splitlines()
                          if x.startswith('success: ')]

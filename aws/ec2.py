@@ -77,7 +77,7 @@ def _tags(instance):
 @_retry
 def _ls(tags, state='running', first_n=None, last_n=None):
     if isinstance(state, str):
-        stat = state.lower()
+        state = state.lower()
         assert state in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + state
         state = [state]
     else:
@@ -248,8 +248,8 @@ def ls(*tags, state='all', first_n=None, last_n=None, all_tags=False):
         return xs
 
 
-def _remote_cmd(cmd, address):
-    return 'fail_msg="failed to run cmd on address: %s"; mkdir -p ~/.cmds || echo $fail_msg; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path || echo $fail_msg; bash $path; code=$?; if [ $code != 0 ]; then echo $fail_msg; exit $code; fi' % (address, util.strings.b64_encode(cmd)) # noqa
+def _remote_cmd(cmd, instance_id):
+    return 'fail_msg="failed to run cmd on instance: %s"; mkdir -p ~/.cmds || echo $fail_msg; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path || echo $fail_msg; bash $path; code=$?; if [ $code != 0 ]; then echo $fail_msg; exit $code; fi' % (instance_id, util.strings.b64_encode(cmd)) # noqa
 
 
 def ssh(
@@ -266,7 +266,7 @@ def ssh(
         key: 'speficy ssh key' = None,
         echo: 'echo some info about what was run on which hosts' = False,
         prefixed: 'when running against a single host, should streaming output be prefixed with name and ip' = False,
-        error_message: 'error message to print for a failed host, something like: {name} {ip} {ipv4_private} failed' = ''):
+        error_message: 'error message to print for a failed host, something like: {id} {name} {ip} {ipv4_private} failed' = ''):
     # tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     # no_tty is the opposite, which is good for backgrounding processes, for example: `ec2 ssh $host -nyc 'bash cmd.sh </dev/null &>cmd.log &'
     # TODO backgrounding appears to succeed, but ec2 ssh never exits, when targeting more than 1 host?
@@ -298,7 +298,7 @@ def ssh(
         logging.info('ec2.ssh running against tags: %s, with cmd: %s', tags, cmd)
     if timeout:
         ssh_cmd = ['timeout', '{}s'.format(timeout)] + ssh_cmd
-    make_ssh_cmd = lambda instance: ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd, instance.public_dns_name)]
+    make_ssh_cmd = lambda instance: ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd, instance.instance_id)]
     if is_cli and not yes and not (len(instances) == 1 and not cmd):
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
@@ -319,14 +319,15 @@ def ssh(
                                   hide_stderr=quiet)
                     except:
                         if error_message:
-                            print(error_message.format(ip=instance.public_dns_name,
+                            print(error_message.format(id=instance.instance_id,
+                                                       ip=instance.public_dns_name,
                                                        ipv4_private=instance.private_ip_address,
                                                        name=_name(instance)),
                                   flush=True)
-                        msg = util.colors.red('failure: ') + _name(instance) + ': ' + instance.public_dns_name
+                        msg = util.colors.red('failure: ') + _name(instance) + ': ' + instance.instance_id
                         failures.append(msg)
                     else:
-                        msg = util.colors.green('success: ') + _name(instance) + ': ' + instance.public_dns_name
+                        msg = util.colors.green('success: ') + _name(instance) + ': ' + instance.instance_id
                         successes.append(msg)
                     if not quiet:
                         logging.info(msg)
@@ -578,9 +579,9 @@ def wait_for_ssh(*tags, yes=False, first_n=None, last_n=None):
     _wait_for_ssh(*instances)
 
 
-def _wait_for_ssh(*instances):
+def _wait_for_ssh(*instances, seconds=0):
     logging.info('wait for ssh...')
-    success = False
+    true_start = time.time()
     for _ in range(200):
         running = _ls([i.id for i in instances], state='running')
         start = time.time()
@@ -588,16 +589,24 @@ def _wait_for_ssh(*instances):
             assert len(running) == len(instances)
             ids = ' '.join([i.instance_id for i in running])
             res = shell.run('ec2 ssh', ids, '-t 5 -yc "whoami>/dev/null" 2>&1', warn=True)
-            try:
-                logging.info('waiting for %s nodes', [x.split()[-1]
-                                                      for x in res['output'].splitlines()
-                                                      if x.startswith(' failures: ')][0])
-            except IndexError: # no more failures
-                if not success:
-                    logging.info('waiting for 0 nodes') # why would this get hit multiple times? returning i.public_dns excepts?
-                success = True
-            assert res['exitcode'] == 0
-            return [i.public_dns_name for i in running]
+            ready_ids = [x.split()[-1]
+                         for x in res['output'].splitlines()
+                         if x.startswith('success: ')]
+            not_ready_ids = [x.split()[-1]
+                             for x in res['output'].splitlines()
+                             if x.startswith('failure: ')]
+            num_ready = len(ready_ids)
+            num_not_ready = len(not_ready_ids)
+            logging.info('waiting for %s nodes', num_not_ready)
+            if seconds and time.time() - true_start > seconds:
+                logging.info('waited for %s seconds, %s ready, %s not ready and will be terminated', seconds, num_ready, num_not_ready)
+                rm(*not_ready_ids, yes=True)
+                num_not_ready = 0
+            if num_not_ready == 0:
+                if ready_ids:
+                    return ready_ids
+                else:
+                    break # fail
         except KeyboardInterrupt:
             raise
         except:
@@ -911,6 +920,8 @@ def _tear_down_spot_instances(request_ids):
         rm(*xs, yes=True)
 
 
+# TODO have a max seconds before returning whatever came up and terminating the
+# rest, just like wait-for-ssh
 def _create_spot_instances(**opts):
     request_ids = [x['SpotInstanceRequestId'] for x in _client().request_spot_instances(**opts)['SpotInstanceRequests']]
     logging.info("wait for spot request to be filled for ids:\n%s", '\n'.join(request_ids))
@@ -976,6 +987,9 @@ def new(name:  'name of the instance',
         spot:  'spot price to bid'           = None,
         tty:   'run cmd in a tty'            = False,
         no_wait: 'do not wait for ssh'       = False,
+        seconds: ('how many seconds to wait for ssh before '
+                  'continuing with however many instances '
+                  'became available and terminating the rest') = 0,
         login: 'login into the instance'     = False):
     if spot:
         spot = float(spot)
@@ -1058,7 +1072,7 @@ def new(name:  'name of the instance',
             break
         else:
             try:
-                _wait_for_ssh(*instances)
+                ready_ids = _wait_for_ssh(*instances, seconds=seconds)
                 break
             except KeyboardInterrupt:
                 rm(*[i.instance_id for i in instances], yes=True)
@@ -1068,12 +1082,13 @@ def new(name:  'name of the instance',
                 logging.exception('failed to spinup and then wait for ssh on instances, retrying...')
     else:
         assert False, 'failed to spinup and then wait for ssh on instances after 5 tries. aborting.'
+    ready_instances = _ls(ready_ids, state='running')
     date = _now()
-    for n, i in enumerate(instances):
+    for n, i in enumerate(ready_instances):
         set_tags = [{'Key': 'Name', 'Value': name},
                     {'Key': 'owner', 'Value': owner},
                     {'Key': 'creation-date', 'Value': date}]
-        if len(instances) > 1:
+        if len(ready_instances) > 1:
             set_tags += [{'Key': 'nth', 'Value': str(n)},
                          {'Key': 'num', 'Value': str(num)}]
         for tag in tags:
@@ -1083,16 +1098,16 @@ def new(name:  'name of the instance',
         logging.info('tagged: %s', _pretty(i))
     if login:
         logging.info('logging in...')
-        ssh(instances[0].instance_id, yes=True, quiet=True)
+        ssh(ready_instances[0].instance_id, yes=True, quiet=True)
     elif cmd:
         if os.path.exists(cmd):
             logging.info('reading cmd from: %s', os.path.abspath(cmd))
             with open(cmd) as f:
                 cmd = f.read()
         logging.info('running cmd...')
-        ssh(*[i.instance_id for i in instances], yes=True, cmd=cmd, no_tty=not tty)
+        ssh(*[i.instance_id for i in ready_instances], yes=True, cmd=cmd, no_tty=not tty)
     logging.info('done')
-    return [i.instance_id for i in instances]
+    return [i.instance_id for i in ready_instances]
 
 # TODO this can probably be cached for some time period
 def regions():

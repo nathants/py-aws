@@ -1048,7 +1048,7 @@ def new(name:  'name of the instance',
             except KeyboardInterrupt:
                 raise
             except:
-                logging.error('failed to create spot instances, retrying...')
+                logging.exception('failed to create spot instances, retrying...')
                 continue
         else:
             logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))

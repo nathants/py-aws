@@ -542,9 +542,6 @@ def rm(*tags, yes=False, first_n=None, last_n=None):
     if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-    if {'pending'} & {i.state['Name'] for i in instances}:
-        logging.info('wait for pending instances to be running')
-        _wait_for_state('running', *instances)
     for i in instances:
         i.terminate()
         logging.info('terminated: %s', _pretty(i))
@@ -587,20 +584,19 @@ def _wait_for_ssh(*instances, seconds=0):
         running = _ls([i.id for i in instances], state='running')
         start = time.time()
         try:
-            assert len(running) == len(instances)
-            ids = ' '.join([i.instance_id for i in running])
-            res = shell.run('ec2 ssh', ids, '--force-batch-mode -t 5 -yc "whoami>/dev/null" 2>&1', warn=True)
+            running_ids = ' '.join([i.instance_id for i in running])
+            res = shell.run('ec2 ssh', running_ids, '--force-batch-mode -t 10 -yc "whoami>/dev/null" 2>&1', warn=True)
             ready_ids = [x.split()[-1]
                          for x in res['output'].splitlines()
                          if x.startswith('success: ')]
-            not_ready_ids = [x.split()[-1]
-                             for x in res['output'].splitlines()
-                             if x.startswith('failure: ')]
             num_ready = len(ready_ids)
-            num_not_ready = len(not_ready_ids)
+            num_not_ready = len(instances) - num_ready
             logging.info('waiting for %s nodes', num_not_ready)
             if seconds and time.time() - true_start > seconds:
                 logging.info('waited for %s seconds, %s ready, %s not ready and will be terminated', seconds, num_ready, num_not_ready)
+                not_ready_ids = [i.instance_id
+                                 for i in instances
+                                 if i.instance_id not in set(ready_ids)]
                 rm(*not_ready_ids, yes=True)
                 num_not_ready = 0
             if num_not_ready == 0:

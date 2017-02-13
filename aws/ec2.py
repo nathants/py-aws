@@ -607,8 +607,7 @@ def _wait_for_ssh(*instances, seconds=0):
                     break # fail
         except KeyboardInterrupt:
             raise
-        except:
-            time.sleep(max(0, 5 - (time.time() - start)))
+        time.sleep(max(0, 5 - (time.time() - start)))
     assert False, 'failed to wait for ssh'
 
 

@@ -597,7 +597,8 @@ def _wait_for_ssh(*instances, seconds=0):
                 not_ready_ids = [i.instance_id
                                  for i in instances
                                  if i.instance_id not in set(ready_ids)]
-                rm(*not_ready_ids, yes=True)
+                if not_ready_ids:
+                    rm(*not_ready_ids, yes=True)
                 num_not_ready = 0
             if num_not_ready == 0:
                 if ready_ids:

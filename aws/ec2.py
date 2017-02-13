@@ -592,7 +592,7 @@ def _wait_for_ssh(*instances, seconds=0):
             num_ready = len(ready_ids)
             num_not_ready = len(instances) - num_ready
             logging.info('waiting for %s nodes', num_not_ready)
-            if seconds and time.time() - true_start > seconds:
+            if seconds and time.time() - true_start > seconds and num_not_ready:
                 logging.info('waited for %s seconds, %s ready, %s not ready and will be terminated', seconds, num_ready, num_not_ready)
                 not_ready_ids = [i.instance_id
                                  for i in instances

@@ -111,6 +111,7 @@ def new(name,
         slave_type='m3.xlarge',
         slave_count=30,
         spot: 'spot bid, if 0 use on-demand instead of spot' = '.15',
+        spot_days: 'how many days to check for spot prices when determining the cheapest zone' = 2,
         key=shell.conf.get_or_prompt_pref('key',  __file__, message='key pair name'),
         sg_master=shell.conf.get_or_prompt_pref('sg_master',  __file__, message='security group master node'),
         sg_slave=shell.conf.get_or_prompt_pref('sg_slave',  __file__, message='security group slave nodes'),
@@ -143,7 +144,7 @@ def new(name,
         for i in instance_groups:
             i['Market'] = 'SPOT'
             i['BidPrice'] = spot
-        zone, _ = aws.ec2.cheapest_zone(slave_type)
+        zone, _ = aws.ec2.cheapest_zone(slave_type, days=spot_days)
         logging.info('using zone: %s', zone)
         instances['Placement'] = {'AvailabilityZone': zone}
     resp = _client().run_job_flow(Name=name,

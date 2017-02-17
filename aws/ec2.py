@@ -956,8 +956,6 @@ def _create_spot_instances(**opts):
         raise Exception('failed to get the right number of instances')
 
 
-
-
 def _make_spot_opts(spot, opts):
     spot_opts = {}
     spot_opts['SpotPrice'] = str(float(spot))

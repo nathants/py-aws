@@ -369,7 +369,7 @@ def _make_callback(instance, quiet, append=None):
     return f
 
 
-def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None):
+def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None, user='ubuntu'):
     assert tags, 'you must specify some tags'
     assert ':' in src + dst, 'you didnt specify a remote path, which starts with ":"'
     instances = _ls(tags, 'running', first_n=first_n, last_n=last_n)
@@ -389,7 +389,7 @@ def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None):
             color = lambda x: x
         name = (instance.public_dns_name + ': ').ljust(justify + 2)
         def fn():
-            host = 'ubuntu@' + instance.public_dns_name
+            host = user + '@' + instance.public_dns_name
             _src = host + src if src.startswith(':') else src
             _dst = host + dst if dst.startswith(':') else dst
             try:
@@ -411,7 +411,7 @@ def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None):
 
 # TODO when one instance only, dont colorize
 # TODO stop using bash -s
-def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_threads=0):
+def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_threads=0, user='ubuntu'):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert instances, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
@@ -435,7 +435,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_t
         def fn():
             try:
                 shell.run('bash', script,
-                          '|ssh', ssh_args, 'ubuntu@' + instance.public_dns_name,
+                          '|ssh', ssh_args, user + '@' + instance.public_dns_name,
                           '"mkdir -p', dst, '&& cd', dst, '&& tar xf -"',
                           callback=lambda x: print(color(name + x), flush=True))
             except:

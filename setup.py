@@ -17,6 +17,7 @@ setuptools.setup(
     entry_points={'console_scripts': ['ec2 = aws.ec2:main',
                                       's3 = aws.s3:main',
                                       'elb = aws.elb:main',
+                                      'emr = aws.emr:main',
                                       'launch = aws.launch:main']},
     description='aws',
 )

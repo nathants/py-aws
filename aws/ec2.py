@@ -982,6 +982,7 @@ def new(name:  'name of the instance',
         cmd:   'ssh command'                 = None,
         num:   'number of instances'         = 1,
         spot:  'spot price to bid'           = None,
+        spot_days: 'how many days to check for spot prices when determining the cheapest zone' = 2,
         tty:   'run cmd in a tty'            = False,
         no_wait: 'do not wait for ssh'       = False,
         seconds: ('how many seconds to wait for ssh before '
@@ -1039,7 +1040,7 @@ def new(name:  'name of the instance',
     # need to fulfill the originally requested number.
 
     if spot and zone is None:
-        zone, _, = cheapest_zone(type, kind='vpc' if vpc else 'classic')
+        zone, _, = cheapest_zone(type, kind='vpc' if vpc else 'classic', days=spot_days)
     for _ in range(5):
         if zone:
             opts['Placement'] = {'AvailabilityZone': zone}

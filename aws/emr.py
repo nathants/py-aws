@@ -116,8 +116,8 @@ def new(name,
         sg_slave=shell.conf.get_or_prompt_pref('sg_slave',  __file__, message='security group slave nodes'),
         job_flow_role='EMR_EC2_DefaultRole',
         service_role='EMR_DefaultRole'):
-    assert master_type.split('.') in ['m3', 'c3'], 'must use non-vpc types, this function is not setup to deal with ebs or vpc right now'
-    assert slave_type.split('.') in ['m3', 'c3'], 'must use non-vpc types, this function is not setup to deal with ebs or vpc right now'
+    assert master_type.split('.')[0] in ['m3', 'c3'], 'must use non-vpc types, this function is not setup to deal with ebs or vpc right now'
+    assert slave_type.split('.')[0] in ['m3', 'c3'], 'must use non-vpc types, this function is not setup to deal with ebs or vpc right now'
     if not sg_master.startswith('sg-'):
         sg_master = aws.ec2.sg_id(sg_master)
     if not sg_slave.startswith('sg-'):

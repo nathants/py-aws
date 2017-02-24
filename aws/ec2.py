@@ -45,9 +45,10 @@ def _retry(f):
         for i in itertools.count():
             try:
                 return f(*a, **kw)
-            except:
+            except Exception as e:
                 if i == 6:
                     raise
+                logging.info('retrying: %s.%s, because of: %s', f.__module__, f.__name__, e)
                 time.sleep(i + random.random())
     return fn
 

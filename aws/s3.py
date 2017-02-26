@@ -169,6 +169,28 @@ def rm(s3_url, recursive=False):
                 yield 'rm s3://%s/%s %s' % (bucket, resp['Deleted'][0]['Key'], 'VERSIONED-DELETE' if resp['Deleted'][0].get('DeleteMarker') else 'PERMANENT-DELETE')
 
 
+def rm_version(s3_url: "s3://bucket/prefix/key::version_id", recursive=False):
+    """
+    delete a specific object version
+    """
+    if not s3_url.startswith('s3://'):
+        logging.info('urls must start with s3://')
+        sys.exit(1)
+    if not len(s3_url.split('::')) == 2:
+        logging.info('you must specify a version-id like: s3://bucket/prefix/key::version_id')
+        sys.exit(1)
+    bucket, *key = s3_url.split('s3://')[-1].split('/')
+    key = '/'.join(key)
+    key, version_id = key.split('::')
+    resp = _retry(_client().delete_objects)(
+        Bucket=bucket,
+        Delete={'Objects': [{'Key': key, 'VersionId': version_id}]}
+    )
+    logging.debug(pprint.pformat(resp))
+    for key in resp['Deleted']:
+        yield 'rm s3://%s/%s PERMANENT-DELETE %s' % (bucket, key['Key'], key['VersionId'])
+
+
 def rm_versions(s3_url, recursive=False):
     """
     delete all versions, including LATEST.
@@ -176,7 +198,7 @@ def rm_versions(s3_url, recursive=False):
     if not s3_url.startswith('s3://'):
         logging.info('urls must start with s3://')
         sys.exit(1)
-    bucket, *key = s3_url.split('s3://')[-1].split('/')
+    bucket, *_ = s3_url.split('s3://')[-1].split('/')
     if recursive:
         results = False
         keys = ls_versions(s3_url, recursive=True, exit_codes=False, version_id=True)

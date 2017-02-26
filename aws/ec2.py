@@ -1233,6 +1233,8 @@ def _get_spot_price(type, kind, start, end):
             break
 
 def max_spot_price(type, kind: 'classic|vpc' = 'classic', days=7):
+    if type.split('.')[0] in ['i3', 'm4', 'c4', 'r4', 'x1', 't2']:
+        kind = 'vpc'
     vals = _spot_price_history(type, kind, days)
     results = []
     for zone, xs in util.iter.groupby(vals, lambda x: x['zone']):

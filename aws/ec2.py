@@ -825,6 +825,23 @@ def amis_fuzzy(*name_fragments):
         print('%s %s' % (util.colors.green(ami.image_id), ami.name))
 
 
+def amis_all(id_only=False):
+    amis = _resource().images.filter(Owners=['self'],
+                                     Filters=[{'Name': 'state',
+                                               'Values': ['available']}])
+    amis = sorted(amis, key=lambda x: x.creation_date, reverse=True)
+    if id_only:
+        return [ami.image_id for ami in amis]
+    else:
+        def f(ami):
+            name, date = ami.name.split('__')
+            description = ami.description if ami.description != name else '-'
+            tag = '%(Key)s=%(Value)s' % ami.tags[0] if ami.tags else '-'
+            return ' '.join([name, ami.image_id, date, description, tag])
+        logging.info('id date description tag')
+        return [f(ami) for ami in amis]
+
+
 def amis(name, *tags, id_only=False, most_recent=False):
     assert len(tags) in [0, 1], 'only one tag currently supported'
     if tags:
@@ -863,16 +880,22 @@ ubuntus_pv = {'xenial': 'ubuntu/images/ebs-ssd/ubuntu-xenial-16.04-amd64-server'
               'trusty': 'ubuntu/images/ebs-ssd/ubuntu-trusty-14.04-amd64-server'}
 
 
-def amis_ubuntu(*name_fragments):
-    name_fragments = ('ubuntu/images/',) + name_fragments
+def amis_ubuntu(*name_fragments, ena=False, sriov=False):
+    name_fragments = ('ubuntu/images',) + name_fragments
+    filters = [{'Name': 'name',
+                'Values': ['*%s*' % '*'.join(name_fragments)]},
+               {'Name': 'architecture',
+                'Values': ['x86_64']},
+               {'Name': 'virtualization-type',
+                'Values': ['hvm']}]
+    if ena:
+        filters.append({'Name': 'ena-support',
+                        'Values': ['true']})
+    if sriov:
+        filters.append({'Name': 'sriov-net-support',
+                        'Values': ['simple']})
     amis = list(_retry(_resource().images.filter)(Owners=['099720109477'],
-                                                  Filters=[{'Name': 'name',
-                                                            'Values': ['*%s*' % '*'.join(name_fragments)]},
-                                                           {'Name': 'architecture',
-                                                            'Values': ['x86_64']},
-                                                           # {'Name': 'virtualization-type',
-                                                           #  'Values': ['hvm']}
-                                                           ]))
+                                                  Filters=filters))
     vals = []
     for name, xs in util.iter.groupby(amis, key=lambda x: x.name.split('-')[:-1]):
         ami = sorted(xs, key=lambda x: x.creation_date)[-1]
@@ -901,11 +924,17 @@ def _subnet(vpc, zone):
     return subnets[0].id
 
 
-def _blocks(gigs):
-    return [{'DeviceName': '/dev/sda1',
-             'Ebs': {'VolumeSize': int(gigs),
-                     'VolumeType': 'gp2',
-                     'DeleteOnTermination': True}}]
+def _blocks(gigs, gigs_st1=None):
+    blocks = [{'DeviceName': '/dev/sda1',
+               'Ebs': {'VolumeSize': int(gigs),
+                       'VolumeType': 'gp2',
+                       'DeleteOnTermination': True}}]
+    if gigs_st1:
+        blocks.append({'DeviceName': '/dev/sda2',
+                       'Ebs': {'VolumeSize': int(gigs_st1),
+                               'VolumeType': 'st1',
+                               'DeleteOnTermination': True}})
+    return blocks
 
 
 def _tear_down_spot_instances(request_ids):
@@ -966,6 +995,27 @@ def _make_spot_opts(spot, opts):
     return spot_opts
 
 
+_default_init = 'date > /tmp/cloudinit.log'
+
+
+_st1_init = """
+set -e
+(
+ echo g # Create a new empty GPT partition table
+ echo n # Add a new partition
+ echo 1 # Partition number
+ echo   # First sector (Accept default: 1)
+ echo   # Last sector (Accept default: varies)
+ echo w # Write changes
+) | sudo fdisk /dev/xvdb
+sleep 2
+yes|sudo mkfs -t ext4 /dev/xvdb
+sudo mkdir -p /mnt
+sudo mount -a
+sudo chown -R ubuntu:ubuntu /mnt
+"""
+
+
 def new(name:  'name of the instance',
         *tags: 'tags to set as "<key>=<value>"',
         key:   'key pair name'               = shell.conf.get_or_prompt_pref('key',  __file__, message='key pair name'),
@@ -975,8 +1025,9 @@ def new(name:  'name of the instance',
         vpc:   'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  __file__, message='vpc name'),
         role:  'ec2 iam role'                = None,
         zone:  'ec2 availability zone'       = None,
-        gigs:  'gb capacity of primary disk' = 8,
-        init:  'cloud init command'          = 'date > /tmp/cloudinit.log',
+        gigs:  'gb capacity of primary gp2 disk' = 8,
+        gigs_st1:  'gb capacity of secondary st1 disk' = 0,
+        init:  'cloud init command'          = _default_init,
         data:  'arbitrary user-data'         = None,
         cmd:   'ssh command'                 = None,
         num:   'number of instances'         = 1,
@@ -1001,8 +1052,10 @@ def new(name:  'name of the instance',
     if data: # you can have either data or init, not both
         init = '#raw-data\n' + data
     else:
+        if gigs_st1 and init == _default_init:
+            init = _st1_init
         assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
-        init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash $path' % util.strings.b64_encode(init)
+        init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash -e $path /var/log/cloud_init_script.log 2>&1' % util.strings.b64_encode(init)
     if ami in ubuntus:
         distro = ami
         images = ubuntus_pv if type.split('.')[0] in ['t1', 'm1'] else ubuntus_hvm_ssd
@@ -1023,7 +1076,7 @@ def new(name:  'name of the instance',
     opts['KeyName'] = key
     opts['SecurityGroupIds'] = [x.id for x in _sgs(names=[sg])]
     opts['InstanceType'] = type
-    opts['BlockDeviceMappings'] = _blocks(gigs)
+    opts['BlockDeviceMappings'] = _blocks(gigs, gigs_st1)
     if role:
         opts['IamInstanceProfile'] = {'Name': role}
 
@@ -1287,13 +1340,14 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
     instances = _ls(tags, ['running', 'stopped'], first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly one instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     instance = instances[0]
-    instance.stop()
-    _wait_for_state('stopped', instance)
-    logging.info('going to image the following instance:')
-    logging.info(' ' + _pretty(instance))
-    if is_cli and not yes:
-        logging.info('\nwould you like to proceed? y/n\n')
-        assert pager.getch() == 'y', 'abort'
+    if instance.state['Name'] == 'running':
+        logging.info('going to image the following instance:')
+        logging.info(' ' + _pretty(instance))
+        if is_cli and not yes:
+            logging.info('\nwould you like to proceed? y/n\n')
+            assert pager.getch() == 'y', 'abort'
+        instance.stop()
+        _wait_for_state('stopped', instance)
     image = instance.create_image(Name=name, Description=description)
     if tag:
         key, value = tag.split('=')

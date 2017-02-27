@@ -1367,6 +1367,7 @@ def spot_requests(*ids, state: 'open | active | closed | cancelled | failed' = N
         Filters=([{'Name': 'state', 'Values': [state]}] if state else [])
     )['SpotInstanceRequests']
     return [{'instance-id': r.get('InstanceId'),
+             'id': r['SpotInstanceRequestId'],
              'date': r['CreateTime'].isoformat()[:-6],
              'state': r['State'],
              'status': r['Status']['Code'],

@@ -26,6 +26,9 @@ import util.strings
 import util.time
 from unittest import mock
 
+# TODO update error messages like "didnt find any BLAH: WHAT_I_FOUND" to also
+# include what we are looking for, and what args we queried with. when ec2 is
+# imported and called directly, like from emr.py, the errors are not helpful.
 
 is_cli = False
 

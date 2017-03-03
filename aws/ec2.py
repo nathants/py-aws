@@ -1019,6 +1019,26 @@ sudo chown -R ubuntu:ubuntu /mnt
 """
 
 
+_nvme_init = """
+(
+ echo g # Create a new empty GPT partition table
+ echo n # Add a new partition
+ echo 1 # Partition number
+ echo   # First sector (Accept default: 1)
+ echo   # Last sector (Accept default: varies)
+ echo w # Write changes
+) | sudo fdisk /dev/nvme0n1
+sleep 2
+sudo mkfs -t ext4 /dev/nvme0n1p1
+sudo mkdir /mnt
+sudo mount -o discard /dev/nvme0n1p1 /mnt
+sudo chown -R ubuntu:ubuntu /mnt
+uuid=$(sudo blkid|grep nvme0n1p1|sed -r 's/.* UUID="([^"]+)".*/\1/')
+echo "UUID=$uuid /mnt ext4 defaults,discard 0 0" | sudo tee -a /etc/fstab
+sudo mount -a # verify no errors in fstab
+"""
+
+
 def new(name:  'name of the instance',
         *tags: 'tags to set as "<key>=<value>"',
         key:   'key pair name'               = shell.conf.get_or_prompt_pref('key',  __file__, message='key pair name'),
@@ -1057,6 +1077,8 @@ def new(name:  'name of the instance',
     else:
         if gigs_st1 and init == _default_init:
             init = _st1_init
+        elif type.startswith('i3.') and init == _default_init:
+            init = _nvme_init
         assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
         init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash -e $path /var/log/cloud_init_script.log 2>&1' % util.strings.b64_encode(init)
     if ami in ubuntus:

@@ -1030,7 +1030,7 @@ _nvme_init = """
 ) | sudo fdisk /dev/nvme0n1
 sleep 2
 sudo mkfs -t ext4 /dev/nvme0n1p1
-sudo mkdir /mnt
+sudo mkdir -p /mnt
 sudo mount -o discard /dev/nvme0n1p1 /mnt
 sudo chown -R ubuntu:ubuntu /mnt
 uuid=$(sudo blkid|grep nvme0n1p1|sed -r 's/.* UUID="([^"]+)".*/\1/')

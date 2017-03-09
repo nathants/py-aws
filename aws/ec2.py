@@ -276,12 +276,8 @@ def ssh(
     # no_tty is the opposite, which is good for backgrounding processes, for example: `ec2 ssh $host -nyc 'bash cmd.sh </dev/null &>cmd.log &'
     # TODO backgrounding appears to succeed, but ec2 ssh never exits, when targeting more than 1 host?
     assert tags, 'you must specify some tags'
-    @_retry
-    def f():
-        x = _ls(tags, 'running', first_n, last_n)
-        assert x, 'didnt find any instances'
-        return x
-    instances = f()
+    instances = _ls(tags, 'running', first_n, last_n)
+    assert instances, 'didnt find any instances'
     if os.path.exists(cmd):
         with open(cmd) as f:
             cmd = f.read()
@@ -998,6 +994,8 @@ def _make_spot_opts(spot, opts):
     return spot_opts
 
 
+# TODO consider having instances tag themselves with cloud-init, so we never
+# get unnamed instances.
 _default_init = 'date > /tmp/cloudinit.log'
 
 

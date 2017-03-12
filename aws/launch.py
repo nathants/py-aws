@@ -75,6 +75,7 @@ def new(name:    'name of all instances',
         type:    'instance type'               = shell.conf.get_or_prompt_pref('type', aws.ec2.__file__, message='instance type'),
         vpc:     'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  aws.ec2.__file__, message='vpc name'),
         zone:    'ec2 availability zone'       = None,
+        role:    'ec2 iam role'                = None,
         gigs:    'gb capacity of primary disk' = 8):
     optional = ['no_rm', 'zone', 'spot', 'tag', 'pre_cmd', 'label']
     for k, v in locals().items():
@@ -137,6 +138,7 @@ def new(name:    'name of all instances',
         for i, (args_chunk, labels_chunk) in enumerate(zip(chunk(args, chunk_size), chunk(labels, chunk_size))):
             logging.info('launching chunk %s of %s, chunk size: %s', i + 1, len(args) // chunk_size + 1, chunk_size)
             instance_ids = aws.ec2.new(name,
+                                       role=role,
                                        spot=spot,
                                        key=key,
                                        ami=ami,

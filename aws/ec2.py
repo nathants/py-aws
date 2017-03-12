@@ -1138,6 +1138,19 @@ def new(name:  'name of the instance',
             logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
             instances = _resource().create_instances(**opts)
         logging.info('instances:\n%s', '\n'.join([i.instance_id for i in instances]))
+        date = _now()
+        for n, i in enumerate(instances):
+            set_tags = [{'Key': 'Name', 'Value': name},
+                        {'Key': 'owner', 'Value': owner},
+                        {'Key': 'creation-date', 'Value': date}]
+            if len(instances) > 1:
+                set_tags += [{'Key': 'nth', 'Value': str(n)},
+                             {'Key': 'num', 'Value': str(num)}]
+            for tag in tags:
+                k, v = tag.split('=')
+                set_tags.append({'Key': k, 'Value': v})
+            _retry(i.create_tags)(Tags=set_tags)
+            logging.info('tagged: %s', _pretty(i))
         if no_wait:
             break
         else:
@@ -1159,19 +1172,6 @@ def new(name:  'name of the instance',
     else:
         assert False, 'failed to spinup and then wait for ssh on instances after 5 tries. aborting.'
     ready_instances = _ls(ready_ids, state='running')
-    date = _now()
-    for n, i in enumerate(ready_instances):
-        set_tags = [{'Key': 'Name', 'Value': name},
-                    {'Key': 'owner', 'Value': owner},
-                    {'Key': 'creation-date', 'Value': date}]
-        if len(ready_instances) > 1:
-            set_tags += [{'Key': 'nth', 'Value': str(n)},
-                         {'Key': 'num', 'Value': str(num)}]
-        for tag in tags:
-            k, v = tag.split('=')
-            set_tags.append({'Key': k, 'Value': v})
-        _retry(i.create_tags)(Tags=set_tags)
-        logging.info('tagged: %s', _pretty(i))
     if login:
         logging.info('logging in...')
         ssh(ready_instances[0].instance_id, yes=True, quiet=True)

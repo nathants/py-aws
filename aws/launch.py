@@ -43,7 +43,7 @@ def _retry(cmd):
 
 
 def _cmd(arg, cmd, no_rm, bucket):
-    _cmd = cmd % {'arg': arg}
+    _cmd = cmd.format(arg=arg)
     kw = {'bucket': bucket,
           'date': shell.run('date -u +%Y-%m-%dT%H:%M:%SZ'),
           'label': '$(aws ec2 describe-tags --filters "Name=resource-id,Values=$(curl http://169.254.169.254/latest/meta-data/instance-id/ 2>/dev/null)"|python3 -c \'import sys, json; print({x["Key"]: x["Value"] for x in json.load(sys.stdin)["Tags"]}["label"])\')', # noqa
@@ -60,10 +60,10 @@ def _cmd(arg, cmd, no_rm, bucket):
 @argh.arg('--arg', action='append')
 @argh.arg('--label', action='append')
 def new(name:    'name of all instances',
-        arg:     'one instance per arg, and that arg is str formatted into cmd, pre_cmd, and tags as "arg"' = None,
+        arg:     'one instance per arg, and that arg is str formatted into cmd, pre_cmd, and tags as {arg}' = None,
         label:   'one label per arg, to use as ec2 tag since arg is often inapproriate, defaults to arg if not provided' = None,
-        pre_cmd: 'optional cmd which runs before cmd is backgrounded. will be retried on failure. format with %(arg)s.' = None,
-        cmd:     'cmd which is run in the background. format with %(arg)s.' = None,
+        pre_cmd: 'optional cmd which runs before cmd is backgrounded. will be retried on failure. format with {arg}.' = None,
+        cmd:     'cmd which is run in the background. format with {arg}.' = None,
         tag:     'tag to set as "<key>=<value>' = None,
         no_rm:   'stop instance instead of terminating when done' = False,
         chunk_size: 'how many args to launch at once' = 50,
@@ -130,8 +130,8 @@ def new(name:    'name of all instances',
     if 'AWS_LAUNCH_RUN_LOCAL' in os.environ:
         for arg in args:
             with shell.tempdir(), shell.set_stream():
-                shell.run(pre_cmd % {'arg': arg})
-                shell.run(cmd % {'arg': arg})
+                shell.run(pre_cmd.format(arg= arg))
+                shell.run(cmd.format(arg=arg))
     else:
         shell.run('aws s3 cp - s3://%(bucket)s/launch_logs/launch=%(launch)s/params.json' % locals(), stdin=data)
         tags += ('launch=%s' % launch,)
@@ -153,7 +153,7 @@ def new(name:    'name of all instances',
                 def fn():
                     try:
                         if pre_cmd:
-                            aws.ec2._retry(aws.ec2.ssh)(instance_id, yes=True, cmd=pre_cmd % {'arg': arg}, prefixed=True)
+                            aws.ec2._retry(aws.ec2.ssh)(instance_id, yes=True, cmd=pre_cmd.format(arg=arg), prefixed=True)
                         aws.ec2.ssh(instance_id, no_tty=True, yes=True, cmd=_cmd(arg, cmd, no_rm, bucket), prefixed=True)
                         instance = aws.ec2._ls([instance_id])[0]
                         aws.ec2._retry(instance.create_tags)(Tags=[{'Key': k, 'Value': v}

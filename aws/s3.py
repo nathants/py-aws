@@ -35,8 +35,9 @@ def ls(s3_url,
     """
     if not s3_url:
         for bucket in _retry(_client().list_buckets)()['Buckets']:
-            yield '%s %s' % (str(bucket['CreationDate'].astimezone(tzlocal.get_localzone()))[:-6],
-                             bucket['Name'])
+            yield '%s %s [%s]' % (str(bucket['CreationDate'].astimezone(tzlocal.get_localzone()))[:-6],
+                                bucket['Name'],
+                                _client().get_bucket_location(Bucket=bucket['Name'])['LocationConstraint'])
     else:
         bucket, *prefix = s3_url.split('s3://')[-1].split('/')
         kw = {'Bucket': bucket,

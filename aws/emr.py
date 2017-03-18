@@ -60,19 +60,31 @@ def instances(cluster_id):
     return aws.ec2.ls(*ids)
 
 
+def master_instance_id(cluster_id):
+    try:
+        return _client().list_instances(ClusterId=cluster_id, InstanceGroupTypes=['MASTER'])['Instances'][0]['Ec2InstanceId']
+    except IndexError:
+        raise AssertionError('no master instance for cluster')
+
+
+def emacs(path, cluster_id):
+    try:
+        instance = aws.ec2._ls([master_instance_id(cluster_id)])[0]
+        shell.check_call("nohup emacsclient /hadoop@{}:{} > /dev/null &".format(instance.public_dns_name, path))
+    except:
+        sys.exit(1)
+
+
 def ssh(cluster_id):
-    instance_id = _client().list_instances(ClusterId=cluster_id, InstanceGroupTypes=['MASTER'])['Instances'][0]['Ec2InstanceId']
-    aws.ec2.ssh(instance_id, user='hadoop')
+    aws.ec2.ssh(master_instance_id(cluster_id), user='hadoop')
 
 
 def scp(src, dst, cluster_id):
-    instance_id = _client().list_instances(ClusterId=cluster_id, InstanceGroupTypes=['MASTER'])['Instances'][0]['Ec2InstanceId']
-    aws.ec2.scp(src, dst, instance_id, user='hadoop', yes=True)
+    aws.ec2.scp(src, dst, master_instance_id(cluster_id), user='hadoop', yes=True)
 
 
 def push(src, dst, cluster_id):
-    instance_id = _client().list_instances(ClusterId=cluster_id, InstanceGroupTypes=['MASTER'])['Instances'][0]['Ec2InstanceId']
-    aws.ec2.push(src, dst, instance_id, user='hadoop', yes=True)
+    aws.ec2.push(src, dst, master_instance_id(cluster_id), user='hadoop', yes=True)
 
 
 def describe(cluster_id):

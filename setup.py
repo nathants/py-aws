@@ -16,6 +16,7 @@ setuptools.setup(
                       'pager >3, <4'],
     entry_points={'console_scripts': ['ec2 = aws.ec2:main',
                                       's3 = aws.s3:main',
+                                      's3-stubbed = aws.s3_stubbed:main',
                                       'elb = aws.elb:main',
                                       'emr = aws.emr:main',
                                       'launch = aws.launch:main']},

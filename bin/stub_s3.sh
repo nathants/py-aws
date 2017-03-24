@@ -1,5 +1,5 @@
 aws() {
-    if [ ! -z $1 ] && [ $1 = s3 ]; then
+    if [ "$1" = s3 ]; then
         shift
         python3 -c "from aws.s3_stubbed import main; main()" $@
     else
@@ -13,7 +13,6 @@ clear-s3-stubbed() {
     unset s3_stubbed_session
     unset -f aws
     unset -f clear-s3-stubbed
-
 }
 
 export -f aws

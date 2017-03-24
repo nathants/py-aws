@@ -22,13 +22,22 @@ def _prefixes(key):
     return [""] + xs
 
 @argh.arg('--recursive')
+def rm(url, recursive=False):
+    pass
+
+@argh.arg('--recursive')
+@argh.arg('url', nargs='?', default='')
 def ls(url, recursive=False):
     url = url.split('s3://')[-1]
     try:
         with open(_cache_path_prefix(url)) as f:
             return sorted(f.read().splitlines())
     except FileNotFoundError:
-        sys.exit(1)
+        try:
+            with open(_cache_path_prefix(os.path.dirname(url))) as f:
+                return sorted(f.read().splitlines())
+        except FileNotFoundError:
+            sys.exit(1)
 
 @argh.arg('--recursive')
 def cp(src, dst, recursive=False):
@@ -60,6 +69,10 @@ def cp(src, dst, recursive=False):
         print('something needs s3://')
         sys.exit(1)
 
+def clear_storage():
+    assert tmpdir and tmpdir.startswith('/tmp/')
+    shell.run('rm -rf', tmpdir, stream=True)
+
 def main():
     try:
         globals()['tmpdir'] = '/tmp/s3_stubbed_session_%s' % os.environ['s3_stubbed_session']
@@ -69,4 +82,5 @@ def main():
         print('must set env var: s3_stubbed_session')
         sys.exit(1)
     else:
+        print('using: s3_stubbed', file=sys.stderr)
         shell.dispatch_commands(globals(), __name__)

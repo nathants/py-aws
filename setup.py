@@ -20,5 +20,6 @@ setuptools.setup(
                                       'elb = aws.elb:main',
                                       'emr = aws.emr:main',
                                       'launch = aws.launch:main']},
+    scripts = ['bin/stub_s3.sh'],
     description='aws',
 )

@@ -48,7 +48,8 @@ def cp(src, dst, recursive=False):
             prefix = '/'.join(parts)
             for x in ls(src, recursive=True):
                 key = x.split()[-1]
-                path = os.path.join(dst, key.split(os.path.dirname(prefix) if dst == '.' else prefix)[-1].lstrip(' /'))
+                token = os.path.dirname(prefix) if dst == '.' else prefix
+                path = os.path.join(dst, key.split(token)[-1].lstrip(' /'))
                 os.makedirs(os.path.dirname(path), 0o777, True)
                 cp('s3://' + os.path.join(bucket, key), path)
         elif dst.startswith('s3://'):
@@ -56,6 +57,13 @@ def cp(src, dst, recursive=False):
                 path = dirpath.split(src)[-1].lstrip('/')
                 for file in files:
                     cp(os.path.join(dirpath, file), os.path.join(dst, path, file))
+    elif src.startswith('s3://') and dst.startswith('s3://'):
+        src = src.split('s3://')[1]
+        dst = dst.split('s3://')[1]
+        assert os.system('cp %s %s' % (_cache_path(src), _cache_path(dst))) == 0
+        for prefix in _prefixes(dst):
+            with open(_cache_path_prefix(prefix), 'a') as f:
+                f.write(dst + '\n')
     elif src.startswith('s3://'):
         src = src.split('s3://')[1]
         try:
@@ -90,7 +98,7 @@ def cp(src, dst, recursive=False):
 def clear_storage():
     assert tmpdir and tmpdir.startswith('/tmp/')
     print('$ rm -rf', tmpdir)
-    os.system('rm -rf %s' % tmpdir)
+    assert os.system('rm -rf %s' % tmpdir) == 0
 
 def main():
     try:
@@ -101,7 +109,6 @@ def main():
         print('must set env var: s3_stubbed_session')
         sys.exit(1)
     else:
-        print('using: s3_stubbed', file=sys.stderr)
         if len(sys.argv) < 2:
             print('usage: aws s3 cp|ls|rm')
             sys.exit(1)

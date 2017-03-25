@@ -14,7 +14,6 @@ def rm_whitespace(x):
                       for y in x.splitlines()
                       if y.strip()])
 
-@pytest.mark.only
 def test_basic():
     with shell.tempdir():
         with open('input.txt', 'w') as f:
@@ -36,6 +35,15 @@ def test_basic():
         run(preamble, 'cp s3://bucket/basic/dir/stdin.txt foo/', stream=True)
         with open('foo/stdin.txt') as f:
             assert f.read() == "asdf\n"
+
+def test_cp_s3_to_s3():
+    run('echo asdf |', preamble, 'cp - s3://bucket/s3_to_s3/a.txt')
+    run(preamble, 'cp s3://bucket/s3_to_s3/a.txt s3://bucket/s3_to_s3/b.txt')
+    assert run(preamble, 'cp s3://bucket/s3_to_s3/b.txt -') == "asdf"
+    assert run(preamble, 'ls s3://bucket/s3_to_s3/').splitlines() == [
+        '_ _ _ a.txt',
+        '_ _ _ b.txt',
+    ]
 
 def test_cp():
     with shell.tempdir():

@@ -49,7 +49,6 @@ def cp(src, dst, recursive=False):
             for x in ls(src, recursive=True):
                 key = x.split()[-1]
                 path = os.path.join(dst, key.split(os.path.dirname(prefix) if dst == '.' else prefix)[-1].lstrip(' /'))
-                # print(key, path)
                 os.makedirs(os.path.dirname(path), 0o777, True)
                 cp('s3://' + os.path.join(bucket, key), path)
         elif dst.startswith('s3://'):
@@ -66,6 +65,9 @@ def cp(src, dst, recursive=False):
             sys.exit(1)
         if dst == '-':
             print(x)
+        elif os.path.isdir(dst):
+            with open(os.path.join(dst, os.path.basename(src)), 'w') as f:
+                f.write(x)
         else:
             with open(dst, 'w') as f:
                 f.write(x)

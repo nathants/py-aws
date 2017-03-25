@@ -14,6 +14,7 @@ def rm_whitespace(x):
                       for y in x.splitlines()
                       if y.strip()])
 
+@pytest.mark.only
 def test_basic():
     with shell.tempdir():
         with open('input.txt', 'w') as f:
@@ -30,6 +31,10 @@ def test_basic():
             assert f.read() == "123"
         run(preamble, 'cp s3://bucket/basic/dir/stdin.txt stdin.downloaded')
         with open('stdin.downloaded') as f:
+            assert f.read() == "asdf\n"
+        run("mkdir foo")
+        run(preamble, 'cp s3://bucket/basic/dir/stdin.txt foo/', stream=True)
+        with open('foo/stdin.txt') as f:
             assert f.read() == "asdf\n"
 
 def test_cp():

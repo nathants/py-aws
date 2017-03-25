@@ -18,7 +18,7 @@ def _cache_path_prefix(key):
 def _prefixes(key):
     xs = key.split('/')
     xs = xs[:-1]
-    xs = ['/'.join(xs[:i]) for i, _ in enumerate(xs, 1)]
+    xs = ['/'.join(xs[:i]) + '/' for i, _ in enumerate(xs, 1)]
     return [""] + xs
 
 @argh.arg('--recursive')
@@ -28,16 +28,27 @@ def rm(url, recursive=False):
 @argh.arg('--recursive')
 @argh.arg('url', nargs='?', default='')
 def ls(url, recursive=False):
-    url = url.split('s3://')[-1]
+    orig_url = url = url.split('s3://')[-1]
     try:
         with open(_cache_path_prefix(url)) as f:
-            return sorted(f.read().splitlines())
+            xs = f.read().splitlines()
     except FileNotFoundError:
         try:
-            with open(_cache_path_prefix(os.path.dirname(url))) as f:
-                return sorted(f.read().splitlines())
+            url = os.path.dirname(url) + '/'
+            with open(_cache_path_prefix(url)) as f:
+                xs = [x for x in f.read().splitlines() if x.startswith(orig_url)]
         except FileNotFoundError:
             sys.exit(1)
+    if recursive:
+        xs = ['_ _ _ %s' % '/'.join(x.split('/')[1:]) for x in xs]
+    else:
+        xs = [x.split(url)[-1].lstrip('/') for x in xs]
+        xs = {'  PRE %s/' % x.split('/')[0]
+              if '/' in x else
+              '_ _ _ %s' % x
+              for x in xs}
+    return sorted(xs)
+
 
 @argh.arg('--recursive')
 def cp(src, dst, recursive=False):

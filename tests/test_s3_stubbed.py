@@ -18,36 +18,36 @@ def test_basic():
     with shell.tempdir():
         with open('input.txt', 'w') as f:
             f.write('123')
-        run(preamble, 'cp input.txt s3://bucket/dir/file.txt')
-        run('echo asdf |', preamble, 'cp - s3://bucket/dir/stdin.txt')
+        run(preamble, 'cp input.txt s3://bucket/basic/dir/file.txt')
+        run('echo asdf |', preamble, 'cp - s3://bucket/basic/dir/stdin.txt')
         assert run(preamble, 'ls s3://bucket/ --recursive').splitlines() == [
-            '_ _ _ dir/file.txt',
-            '_ _ _ dir/stdin.txt']
-        assert run(preamble, 'cp s3://bucket/dir/file.txt -') == "123"
-        assert run(preamble, 'cp s3://bucket/dir/stdin.txt -') == "asdf"
-        run(preamble, 'cp s3://bucket/dir/file.txt file.downloaded')
+            '_ _ _ basic/dir/file.txt',
+            '_ _ _ basic/dir/stdin.txt']
+        assert run(preamble, 'cp s3://bucket/basic/dir/file.txt -') == "123"
+        assert run(preamble, 'cp s3://bucket/basic/dir/stdin.txt -') == "asdf"
+        run(preamble, 'cp s3://bucket/basic/dir/file.txt file.downloaded')
         with open('file.downloaded') as f:
             assert f.read() == "123"
-        run(preamble, 'cp s3://bucket/dir/stdin.txt stdin.downloaded')
+        run(preamble, 'cp s3://bucket/basic/dir/stdin.txt stdin.downloaded')
         with open('stdin.downloaded') as f:
             assert f.read() == "asdf\n"
 
 def test_listing():
-    run('echo |', preamble, 'cp - s3://bucket/dir1/key1.txt')
-    run('echo |', preamble, 'cp - s3://bucket/dir1/dir2/key2.txt')
-    assert run(preamble, 'ls bucket/dir1/ke') == rm_whitespace("""
+    run('echo |', preamble, 'cp - s3://bucket/listing/dir1/key1.txt')
+    run('echo |', preamble, 'cp - s3://bucket/listing/dir1/dir2/key2.txt')
+    assert run(preamble, 'ls bucket/listing/dir1/ke') == rm_whitespace("""
         _ _ _ key1.txt
     """)
-    assert rm_whitespace(run(preamble, 'ls bucket/dir1/')) == rm_whitespace("""
+    assert rm_whitespace(run(preamble, 'ls bucket/listing/dir1/')) == rm_whitespace("""
           PRE dir2/
         _ _ _ key1.txt
     """)
-    assert rm_whitespace(run(preamble, 'ls bucket/d')) == rm_whitespace("""
+    assert rm_whitespace(run(preamble, 'ls bucket/listing/d')) == rm_whitespace("""
           PRE dir1/
     """)
-    assert rm_whitespace(run(preamble, 'ls bucket/d --recursive')) == rm_whitespace("""
-        _ _ _ dir1/dir2/key2.txt
-        _ _ _ dir1/key1.txt
+    assert rm_whitespace(run(preamble, 'ls bucket/listing/d --recursive')) == rm_whitespace("""
+        _ _ _ listing/dir1/dir2/key2.txt
+        _ _ _ listing/dir1/key1.txt
     """)
     with pytest.raises(AssertionError):
         run(preamble, 'ls bucket/fake/')

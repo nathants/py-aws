@@ -1,7 +1,5 @@
-import shell
 import sys
 import os
-import argh
 import hashlib
 
 tmpdir = None
@@ -21,12 +19,6 @@ def _prefixes(key):
     xs = ['/'.join(xs[:i]) + '/' for i, _ in enumerate(xs, 1)]
     return [""] + xs
 
-@argh.arg('--recursive')
-def rm(url, recursive=False):
-    pass
-
-@argh.arg('--recursive')
-@argh.arg('url', nargs='?', default='')
 def ls(url, recursive=False):
     orig_url = url = url.split('s3://')[-1]
     try:
@@ -47,10 +39,9 @@ def ls(url, recursive=False):
               if '/' in x else
               '_ _ _ %s' % x
               for x in xs}
-    return sorted(xs)
+    for x in sorted(xs):
+        print(x)
 
-
-@argh.arg('--recursive')
 def cp(src, dst, recursive=False):
     if src.startswith('s3://'):
         src = src.split('s3://')[1]
@@ -82,7 +73,8 @@ def cp(src, dst, recursive=False):
 
 def clear_storage():
     assert tmpdir and tmpdir.startswith('/tmp/')
-    shell.run('rm -rf', tmpdir, stream=True)
+    print('$ rm -rf', tmpdir)
+    os.system('rm -rf %s' % tmpdir)
 
 def main():
     try:
@@ -94,4 +86,20 @@ def main():
         sys.exit(1)
     else:
         print('using: s3_stubbed', file=sys.stderr)
-        shell.dispatch_commands(globals(), __name__)
+        cmd = sys.argv[1]
+        if cmd == 'cp':
+            if len(sys.argv) < 4:
+                print('usage: aws s3 cp SRC DST [--recursive]')
+                sys.exit(1)
+            else:
+                cp(sys.argv[2], sys.argv[3], len(sys.argv) > 4 and sys.argv[4] == '--recursive')
+        elif cmd == 'ls':
+            if len(sys.argv) < 3:
+                print('usage: aws s3 ls URL [--recursive]')
+                sys.exit(1)
+            else:
+                ls(sys.argv[2], len(sys.argv) > 3 and sys.argv[3] == '--recursive')
+        elif cmd == 'rm':
+            print('rm not implemented')
+        else:
+            sys.exit(1)

@@ -39,11 +39,25 @@ def ls(url, recursive=False):
               if '/' in x else
               '_ _ _ %s' % x
               for x in xs}
-    for x in sorted(xs):
-        print(x)
+    return sorted(xs)
 
 def cp(src, dst, recursive=False):
-    if src.startswith('s3://'):
+    if recursive:
+        if src.startswith('s3://'):
+            bucket, *parts = src.split('s3://')[-1].rstrip('/').split('/')
+            prefix = '/'.join(parts)
+            for x in ls(src, recursive=True):
+                key = x.split()[-1]
+                path = os.path.join(dst, key.split(os.path.dirname(prefix) if dst == '.' else prefix)[-1].lstrip(' /'))
+                # print(key, path)
+                os.makedirs(os.path.dirname(path), 0o777, True)
+                cp('s3://' + os.path.join(bucket, key), path)
+        elif dst.startswith('s3://'):
+            for dirpath, dirs, files in os.walk(src):
+                path = dirpath.split(src)[-1].lstrip('/')
+                for file in files:
+                    cp(os.path.join(dirpath, file), os.path.join(dst, path, file))
+    elif src.startswith('s3://'):
         src = src.split('s3://')[1]
         try:
             with open(_cache_path(src)) as f:
@@ -86,20 +100,25 @@ def main():
         sys.exit(1)
     else:
         print('using: s3_stubbed', file=sys.stderr)
-        cmd = sys.argv[1]
-        if cmd == 'cp':
-            if len(sys.argv) < 4:
-                print('usage: aws s3 cp SRC DST [--recursive]')
-                sys.exit(1)
-            else:
-                cp(sys.argv[2], sys.argv[3], len(sys.argv) > 4 and sys.argv[4] == '--recursive')
-        elif cmd == 'ls':
-            if len(sys.argv) < 3:
-                print('usage: aws s3 ls URL [--recursive]')
-                sys.exit(1)
-            else:
-                ls(sys.argv[2], len(sys.argv) > 3 and sys.argv[3] == '--recursive')
-        elif cmd == 'rm':
-            print('rm not implemented')
-        else:
+        if len(sys.argv) < 2:
+            print('usage: aws s3 cp|ls|rm')
             sys.exit(1)
+        else:
+            cmd = sys.argv[1]
+            if cmd == 'cp':
+                if len(sys.argv) < 4:
+                    print('usage: aws s3 cp SRC DST [--recursive]')
+                    sys.exit(1)
+                else:
+                    cp(sys.argv[2], sys.argv[3], len(sys.argv) > 4 and sys.argv[4] == '--recursive')
+            elif cmd == 'ls':
+                if len(sys.argv) < 3:
+                    print('usage: aws s3 ls URL [--recursive]')
+                    sys.exit(1)
+                else:
+                    for x in ls(sys.argv[2], len(sys.argv) > 3 and sys.argv[3] == '--recursive'):
+                        print(x)
+            elif cmd == 'rm':
+                print('rm not implemented')
+            else:
+                sys.exit(1)

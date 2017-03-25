@@ -32,6 +32,57 @@ def test_basic():
         with open('stdin.downloaded') as f:
             assert f.read() == "asdf\n"
 
+def test_cp():
+    with shell.tempdir():
+        run('mkdir -p foo/3')
+        with open('foo/1.txt', 'w') as f:
+            f.write('123')
+        with open('foo/2.txt', 'w') as f:
+            f.write('234')
+        with open('foo/3/4.txt', 'w') as f:
+            f.write('456')
+        run(preamble, 'cp foo/ s3://bucket/cp/dst/ --recursive')
+        assert rm_whitespace(run(preamble, 'ls bucket/cp/dst/')) == rm_whitespace("""
+              PRE 3/
+            _ _ _ 1.txt
+            _ _ _ 2.txt
+        """)
+        assert rm_whitespace(run(preamble, 'ls bucket/cp/dst/ --recursive')) == rm_whitespace("""
+            _ _ _ cp/dst/1.txt
+            _ _ _ cp/dst/2.txt
+            _ _ _ cp/dst/3/4.txt
+        """)
+        run(preamble, 'cp s3://bucket/cp/dst/ dst1/ --recursive')
+        assert run('grep ".*" $(find dst1/ -type f|LC_ALL=C sort)') == rm_whitespace("""
+            dst1/1.txt:123
+            dst1/2.txt:234
+            dst1/3/4.txt:456
+        """)
+        run(preamble, 'cp s3://bucket/cp/dst/ . --recursive')
+        assert run('grep ".*" $(find dst/ -type f|LC_ALL=C sort)') == rm_whitespace("""
+            dst/1.txt:123
+            dst/2.txt:234
+            dst/3/4.txt:456
+        """)
+        run('rm -rf dst')
+        run(preamble, 'cp foo s3://bucket/cp/dst2 --recursive')
+        assert rm_whitespace(run(preamble, 'ls bucket/cp/dst2/')) == rm_whitespace("""
+              PRE 3/
+            _ _ _ 1.txt
+            _ _ _ 2.txt
+        """)
+        assert rm_whitespace(run(preamble, 'ls bucket/cp/dst2/ --recursive')) == rm_whitespace("""
+            _ _ _ cp/dst2/1.txt
+            _ _ _ cp/dst2/2.txt
+            _ _ _ cp/dst2/3/4.txt
+        """)
+        run(preamble, 'cp s3://bucket/cp/dst . --recursive')
+        assert run('grep ".*" $(find dst/ -type f|LC_ALL=C sort)') == rm_whitespace("""
+            dst/1.txt:123
+            dst/2.txt:234
+            dst/3/4.txt:456
+        """)
+
 def test_listing():
     run('echo |', preamble, 'cp - s3://bucket/listing/dir1/key1.txt')
     run('echo |', preamble, 'cp - s3://bucket/listing/dir1/dir2/key2.txt')

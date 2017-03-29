@@ -127,7 +127,7 @@ def new(name:    'name of all instances',
                        'type': type,
                        'vpc': vpc,
                        'gigs': gigs})
-    if 'AWS_LAUNCH_RUN_LOCAL' in os.environ:
+    if 'LAUNCH_LOCAL' in os.environ:
         for arg in args:
             with shell.tempdir(), shell.set_stream():
                 shell.run(pre_cmd.format(arg= arg))
@@ -177,7 +177,7 @@ def wait(launch):
     """
     wait for all args to finish, and exit 0 only if all logged "exited 0".
     """
-    if 'AWS_LAUNCH_RUN_LOCAL' not in os.environ:
+    if 'LAUNCH_LOCAL' not in os.environ:
         launch = launch.replace('launch=', '')
         logging.info('wait for launch=%s', launch)
         while True:

@@ -1617,7 +1617,7 @@ def _cmd(cmd, arg_num, worker_num):
     cmd = cmd.format(worker_num=worker_num)
     stdout = _stdout_file(arg_num)
     stderr = _stderr_file(arg_num)
-    return 'export input=$(cat -); (echo %(cmd)s 1>&2; echo "$input" | %(cmd)s; echo exited: $? 1>&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
+    return 'export input="$(cat -)"; (echo %(cmd)s 1>&2; echo "$input" | %(cmd)s; echo exited: $? 1>&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
 
 
 def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',

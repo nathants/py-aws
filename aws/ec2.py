@@ -1620,9 +1620,9 @@ def _cmd(cmd, arg_num, worker_num):
     return 'export input=$(cat -); (echo %(cmd)s 1>&2; echo "$input" | %(cmd)s; echo exited: $? 1>&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
 
 
-def map(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
-        args: 'comma seperated strings which will be supplied as stdin to cmd',
-        cmd: '{worker_num} can be used as a unique integer id per worker'):
+def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
+         args: 'comma seperated strings which will be supplied as stdin to cmd',
+         cmd: '{worker_num} can be used as a unique integer id per worker'):
     args = args.split(',')
     instance_ids = instance_ids.split(',')
     instances = _ls(instance_ids, state='running')
@@ -1630,64 +1630,49 @@ def map(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
     nums = {instance: i for i, instance in enumerate(instances)}
     active = {}
     results = {}
-    # process every arg
     numbered_args = list(reversed(list(enumerate(args))))
-    while True:
+    # process every arg
+    while numbered_args or active:
         assert len(active) <= len(instances)
         # start jobs on available instances
-        jobs = []
-        while True:
-            available = [i for i in instances if i not in active]
-            if not available or not numbered_args:
-                break
-            arg_num, arg = numbered_args.pop()
-            instance = available[0]
-            jobs.append(pool.thread.submit(
-                ssh,
-                instance,
+        def start(x):
+            instance, (arg_num, arg) = x
+            ssh(instance,
                 cmd=_cmd(cmd, arg_num, nums[instance]),
                 no_tty=True,
                 yes=True,
                 quiet=True,
-                stdin=arg,
-            ))
+                stdin=arg)
             active[instance] = arg_num
             logging.info('started: arg_num: %s, instance: %s', arg_num, instance.instance_id)
-        for job in jobs:
-            job.result()
+        to_start = [(i, numbered_args.pop())
+                    for i in instances
+                    if i not in active
+                    and numbered_args]
+        list(pool.thread.map(start, to_start))
         # check for completed jobs and handle outputs
-        def check(instance, arg_num):
-            res = ssh(
-                instance,
-                cmd='tail -n1 %s' % _stderr_file(arg_num),
-                quiet=True,
-                no_stream=True,
-                yes=True,
-            )
+        def check(x):
+            instance, arg_num = x
+            res = ssh(instance,
+                      cmd='tail -n1 %s' % _stderr_file(arg_num),
+                      quiet=True,
+                      no_stream=True,
+                      yes=True)
             if res.startswith('exited: '):
                 code = res.split()[-1]
                 if code == '0':
                     logging.info('success: arg_num: %s, instance: %s', arg_num, instance.instance_id)
-                    results[arg_num] = ssh(
-                        instance,
-                        cmd='cat %s' % _stdout_file(arg_num),
-                        quiet=True,
-                        no_stream=True,
-                        yes=True,
-                    )
+                    results[arg_num] = ssh(instance,
+                                           cmd='cat %s' % _stdout_file(arg_num),
+                                           quiet=True,
+                                           no_stream=True,
+                                           yes=True)
                     del active[instance]
                 else:
                     # TODO retries?
                     logging.info('error: arg_num: %s, instance: %s', arg_num, instance.instance_id)
                     sys.exit(1)
-        jobs = []
-        for instance, arg_num in list(active.items()):
-            jobs.append(pool.thread.submit(check, instance, arg_num))
-        for job in jobs:
-            job.result()
-        # all done
-        if not numbered_args and not active:
-            break
+        list(pool.thread.map(check, list(active.items())))
     assert len(results) == len(args), 'mismatch result sizes'
     return ['%s:%s' % (arg_num, results[arg_num]) for arg_num, _ in enumerate(args)]
 

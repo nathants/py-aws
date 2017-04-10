@@ -319,6 +319,7 @@ def ssh(
                     try:
                         shell.run(*make_ssh_cmd(instance),
                                   callback=_make_callback(instance, quiet, results, no_stream),
+                                  stream_only=stream_only,
                                   echo=False,
                                   raw_cmd=True,
                                   stream=False,
@@ -354,10 +355,11 @@ def ssh(
         elif cmd:
             return shell.run(*make_ssh_cmd(instances[0]),
                              echo=False,
-                             stream=not prefixed,
+                             stream=not prefixed and not no_stream,
+                             stream_only=stream_only,
                              hide_stderr=quiet,
                              raw_cmd=True,
-                             callback=_make_callback(instances[0], quiet) if prefixed else None)
+                             callback=_make_callback(instances[0], quiet, None, no_stream) if prefixed else None)
         else:
             subprocess.check_call(ssh_cmd + [user + '@' + instances[0].public_dns_name])
     except:

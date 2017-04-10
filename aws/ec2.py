@@ -252,15 +252,18 @@ def ls(*tags, state='all', first_n=None, last_n=None, all_tags=False):
         return xs
 
 
-def _remote_cmd(cmd, instance_id):
-    return 'fail_msg="failed to run cmd on instance: %s"; mkdir -p ~/.cmds || echo $fail_msg; path=~/.cmds/$(uuidgen); echo %s | base64 -d > $path || echo $fail_msg; bash $path; code=$?; if [ $code != 0 ]; then echo $fail_msg; exit $code; fi' % (instance_id, util.strings.b64_encode(cmd)) # noqa
+def _remote_cmd(cmd, stdin, instance_id):
+    return 'fail_msg="failed to run cmd on instance: %s"; mkdir -p ~/.cmds || echo $fail_msg; path=~/.cmds/$(uuidgen); input=$path.input; echo %s | base64 -d > $path || echo $fail_msg; echo %s | base64 -d > $input || echo $fail_msg; cat $input | bash $path; code=$?; if [ $code != 0 ]; then echo $fail_msg; exit $code; fi' % (instance_id, util.strings.b64_encode(cmd), util.strings.b64_encode(stdin)) # noqa
 
 
 def ssh(
         *tags,
         first_n=None,
         last_n=None,
+        stdin: 'stdin value to be provided to remote cmd' = '',
         quiet: 'less output' = False,
+        no_stream: 'dont stream to stderr, only output to stdout' = False,
+        stream_only: 'dont accumulate output for stdout, only stream to stderr' = False,
         cmd: 'cmd to run on remote host, can also be a file which will be read' ='',
         yes: 'no prompt to proceed' = False,
         max_threads: 'max ssh connections' = 20,
@@ -276,7 +279,10 @@ def ssh(
     # no_tty is the opposite, which is good for backgrounding processes, for example: `ec2 ssh $host -nyc 'bash cmd.sh </dev/null &>cmd.log &'
     # TODO backgrounding appears to succeed, but ec2 ssh never exits, when targeting more than 1 host?
     assert tags, 'you must specify some tags'
-    instances = _ls(tags, 'running', first_n, last_n)
+    if hasattr(tags[0], 'instance_id'):
+        instances = tags
+    else:
+        instances = _ls(tags, 'running', first_n, last_n)
     assert instances, 'didnt find any instances'
     if os.path.exists(cmd):
         with open(cmd) as f:
@@ -299,21 +305,20 @@ def ssh(
         logging.info('ec2.ssh running against tags: %s, with cmd: %s', tags, cmd)
     if timeout:
         ssh_cmd = ['timeout', '{}s'.format(timeout)] + ssh_cmd
-    make_ssh_cmd = lambda instance: ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd, instance.instance_id)]
+    make_ssh_cmd = lambda instance: ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd, stdin, instance.instance_id)]
     if is_cli and not yes and not (len(instances) == 1 and not cmd):
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-    # TODO have a --stream-only to not accumulate lines for return, here, or in shell.run
     try:
         if cmd and len(instances) > 1 or batch_mode:
             failures = []
             successes = []
-            results = []
+            results = None if stream_only else []
             def run(instance):
                 def fn():
                     try:
                         shell.run(*make_ssh_cmd(instance),
-                                  callback=_make_callback(instance, quiet, results),
+                                  callback=_make_callback(instance, quiet, results, no_stream),
                                   echo=False,
                                   raw_cmd=True,
                                   stream=False,
@@ -359,13 +364,14 @@ def ssh(
         sys.exit(1)
 
 
-def _make_callback(instance, quiet, append=None):
+def _make_callback(instance, quiet, append=None, no_stream=False):
     name = _name(instance) + ': ' + instance.public_dns_name + ': '
     def f(x):
         val = (x if quiet else name + x).replace('\r', '')
-        if append:
+        if append is not None:
             append.append(val)
-        print(val, flush=True)
+        if not no_stream:
+            logging.info(val)
     return f
 
 

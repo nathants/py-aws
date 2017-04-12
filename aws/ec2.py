@@ -1638,7 +1638,10 @@ def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
          cmd: '{worker_num} can be used as a unique integer id per worker'):
     args = args.split(',')
     instance_ids = instance_ids.split(',')
-    instances = _ls(instance_ids, state='running')
+    if instance_ids[0].endswith('.com') or instance_ids[0].count('.') == 3 and instance_ids[0].replace('.', '').isdigit():
+        instances = [_instance(tag) for tag in instance_ids]
+    else:
+        instances = _ls(instance_ids, state='running')
     assert len(instances) == len(instance_ids)
     nums = {instance: i for i, instance in enumerate(instances)}
     active = {}

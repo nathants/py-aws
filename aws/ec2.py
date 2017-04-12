@@ -1617,7 +1617,7 @@ def _cmd(cmd, arg_num, worker_num):
     cmd = cmd.format(worker_num=worker_num)
     stdout = _stdout_file(arg_num)
     stderr = _stderr_file(arg_num)
-    return 'export input="$(cat -)"; (echo %(cmd)s 1>&2; echo "$input" | %(cmd)s; echo exited: $? 1>&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
+    return 'set +e; export input="$(cat -)"; (echo "%(cmd)s" 1>&2; echo "$input" | (%(cmd)s); echo exited: $? 1>&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
 
 
 def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
@@ -1674,7 +1674,7 @@ def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
                     sys.exit(1)
         list(pool.thread.map(check, list(active.items())))
     assert len(results) == len(args), 'mismatch result sizes'
-    return ['%s:%s' % (arg_num, results[arg_num]) for arg_num, _ in enumerate(args)]
+    return [results[arg_num] for arg_num, _ in enumerate(args)]
 
 
 def main():

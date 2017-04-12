@@ -19,6 +19,32 @@ def _prefixes(key):
     xs = ['/'.join(xs[:i]) + '/' for i, _ in enumerate(xs, 1)]
     return [""] + xs
 
+def rm(url, recursive=False):
+    url = url.split('s3://')[-1]
+    if recursive:
+        try:
+            with open(_cache_path_prefix(url)) as f:
+                xs = f.read().splitlines()
+        except FileNotFoundError:
+            try:
+                url = os.path.dirname(url) + '/'
+                with open(_cache_path_prefix(url)) as f:
+                    xs = [x for x in f.read().splitlines() if x.startswith(url)]
+            except FileNotFoundError:
+                sys.exit(0)
+        for x in xs:
+            rm(x)
+    else:
+        if not os.path.isfile(_cache_path(url)):
+            sys.exit(1)
+        else:
+            os.remove(_cache_path(url))
+            for prefix in _prefixes(url):
+                with open(_cache_path_prefix(prefix)) as f:
+                    val = '\n'.join([x for x in f.read().splitlines() if x != url])
+                with open(_cache_path_prefix(prefix), 'w') as f:
+                    f.write(val)
+
 def ls(url, recursive=False):
     orig_url = url = url.split('s3://')[-1]
     try:
@@ -128,6 +154,12 @@ def main():
                     for x in ls(sys.argv[2], len(sys.argv) > 3 and sys.argv[3] == '--recursive'):
                         print(x)
             elif cmd == 'rm':
-                print('rm not implemented')
+                if len(sys.argv) < 3:
+                    print('usage: aws s3 rm URL [--recursive]')
+                    sys.exit(1)
+                else:
+                    rm(sys.argv[2], len(sys.argv) > 3 and sys.argv[3] == '--recursive')
+            elif cmd == 'clear-storage':
+                clear_storage()
             else:
                 sys.exit(1)

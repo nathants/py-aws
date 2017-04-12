@@ -1635,7 +1635,8 @@ def _cmd(cmd, arg_num, worker_num):
 
 def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
          args: 'comma seperated strings which will be supplied as stdin to cmd',
-         cmd: '{worker_num} can be used as a unique integer id per worker'):
+         cmd: '{worker_num} can be used as a unique integer id per worker',
+         retries: 'how many times to retry each arg' = 3):
     args = args.split(',')
     instance_ids = instance_ids.split(',')
     if instance_ids[0].endswith('.com') or instance_ids[0].count('.') == 3 and instance_ids[0].replace('.', '').isdigit():
@@ -1647,6 +1648,7 @@ def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
     active = {}
     results = {}
     numbered_args = list(reversed(list(enumerate(args))))
+    retried = collections.Counter()
     # process every arg
     while numbered_args or active:
         assert len(active) <= len(instances)
@@ -1659,7 +1661,7 @@ def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
                 yes=True,
                 quiet=True,
                 stdin=arg)
-            active[instance] = arg_num
+            active[instance] = (arg_num, arg)
             logging.info('started: arg_num: %s, instance: %s', arg_num, instance.instance_id)
         to_start = [(i, numbered_args.pop())
                     for i in instances
@@ -1668,7 +1670,7 @@ def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
         list(pool.thread.map(start, to_start))
         # check for completed jobs and handle outputs
         def check(x):
-            instance, arg_num = x
+            instance, (arg_num, arg) = x
             res = ssh(instance,
                       cmd='tail -n1 %s' % _stderr_file(arg_num),
                       quiet=True,
@@ -1685,9 +1687,13 @@ def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
                                            yes=True)
                     del active[instance]
                 else:
-                    # TODO retries?
-                    logging.info('error: arg_num: %s, instance: %s', arg_num, instance.instance_id)
-                    sys.exit(1)
+                    numbered_args.append((arg_num, arg))
+                    retried[arg_num] += 1
+                    if retried[arg_num] < retries:
+                        logging.info('retrying: arg_num: %s, instance: %s, retried: %s', arg_num, instance.instance_id, retried[arg_num])
+                    else:
+                        logging.info('error: arg_num: %s, instance: %s, retried: %s', arg_num, instance.instance_id, retries)
+                        sys.exit(1)
         list(pool.thread.map(check, list(active.items())))
     assert len(results) == len(args), 'mismatch result sizes'
     return [results[arg_num] for arg_num, _ in enumerate(args)]

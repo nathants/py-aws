@@ -255,6 +255,12 @@ def ls(*tags, state='all', first_n=None, last_n=None, all_tags=False):
 def _remote_cmd(cmd, stdin, instance_id):
     return 'fail_msg="failed to run cmd on instance: %s"; mkdir -p ~/.cmds || echo $fail_msg; path=~/.cmds/$(uuidgen); input=$path.input; echo %s | base64 -d > $path || echo $fail_msg; echo %s | base64 -d > $input || echo $fail_msg; cat $input | bash $path; code=$?; if [ $code != 0 ]; then echo $fail_msg; exit $code; fi' % (instance_id, util.strings.b64_encode(cmd), util.strings.b64_encode(stdin)) # noqa
 
+class _instance:
+    def __init__(self, ip):
+        self.instance_id = ip
+        self.public_dns_name = ip
+        self.private_ip_address = ip
+        self.tags = [{'Key': 'Name', 'Value': ip}]
 
 def ssh(
         *tags,
@@ -281,6 +287,8 @@ def ssh(
     assert tags, 'you must specify some tags'
     if hasattr(tags[0], 'instance_id'):
         instances = tags
+    elif tags[0].endswith('.com') or tags[0].count('.') == 3 and tags[0].replace('.', '').isdigit():
+        instances = [_instance(tag) for tag in tags]
     else:
         instances = _ls(tags, 'running', first_n, last_n)
     assert instances, 'didnt find any instances'
@@ -296,10 +304,15 @@ def ssh(
             cmd = '\n'.join(lines)
         else:
             cmd = 'set -e\n' + cmd
-    assert (cmd and instances) or len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    if not isinstance(instances[0], _instance):
+        assert (cmd and instances) or len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     if not (quiet and yes):
-        for i in instances:
-            logging.info(_pretty(i))
+        if not isinstance(instances[0], _instance):
+            for i in instances:
+                logging.info(_pretty(i))
+        else:
+            for i in instances:
+                logging.info(i.instance_id)
     ssh_cmd = ('ssh -A' + (' -i {} '.format(key) if key else '') + (' -tt ' if not no_tty or not cmd else ' -T ') + ssh_args).split()
     if echo:
         logging.info('ec2.ssh running against tags: %s, with cmd: %s', tags, cmd)

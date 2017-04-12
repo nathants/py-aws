@@ -133,3 +133,10 @@ def test_rm():
 
 def test_prefixes():
     assert ["", "a/", "a/b/", "a/b/c/"] == s3._prefixes('a/b/c/d.csv')
+
+def test_binary():
+    with shell.tempdir():
+        with open('1.txt', 'w') as f:
+            f.write('123')
+        run('cat 1.txt | lz4 -1 |', preamble, 'cp - s3://bucket/binary/1.txt')
+        assert '123' == run(preamble, 'cp s3://bucket/binary/1.txt - | lz4 -d -c')

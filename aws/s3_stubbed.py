@@ -93,26 +93,26 @@ def cp(src, dst, recursive=False):
     elif src.startswith('s3://'):
         src = src.split('s3://')[1]
         try:
-            with open(_cache_path(src)) as f:
+            with open(_cache_path(src), 'rb') as f:
                 x = f.read()
         except FileNotFoundError:
             sys.exit(1)
         if dst == '-':
-            print(x)
+            sys.stdout.buffer.write(x)
         elif os.path.isdir(dst):
-            with open(os.path.join(dst, os.path.basename(src)), 'w') as f:
+            with open(os.path.join(dst, os.path.basename(src)), 'wb') as f:
                 f.write(x)
         else:
-            with open(dst, 'w') as f:
+            with open(dst, 'wb') as f:
                 f.write(x)
     elif dst.startswith('s3://'):
         if src == '-':
-            x = sys.stdin.read()
+            x = sys.stdin.buffer.read()
         else:
-            with open(src) as f:
+            with open(src, 'rb') as f:
                 x = f.read()
         dst = dst.split('s3://')[1]
-        with open(_cache_path(dst), 'w') as f:
+        with open(_cache_path(dst), 'wb') as f:
             f.write(x)
         for prefix in _prefixes(dst):
             with open(_cache_path_prefix(prefix), 'a') as f:

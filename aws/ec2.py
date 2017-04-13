@@ -1638,7 +1638,8 @@ def _cmd(cmd, arg_num, worker_num):
 def pmap(instance_ids: 'comma separated ec2 instance ids to run cmds on',
          args: 'comma sepa\rated strings which will be supplied as stdin to cmd',
          cmd: '{worker_num} can be used as a unique integer id per worker',
-         retries: 'how many times to retry each arg' = 10):
+         retries: 'how many times to retry each arg' = 10,
+         retry_sleep: 'seconds to sleep before retrying' = 30):
     args = args.split(',')
     instance_ids = instance_ids.split(',')
     if instance_ids[0].endswith('.com') or instance_ids[0].count('.') == 3 and instance_ids[0].replace('.', '').isdigit():
@@ -1675,26 +1676,31 @@ def pmap(instance_ids: 'comma separated ec2 instance ids to run cmds on',
         # check for completed jobs and handle outputs
         def check(x):
             instance, (arg_num, arg) = x
-            res = ssh(instance,
-                      cmd='tail -n1 %s' % _stderr_file(arg_num),
-                      quiet=True,
-                      no_stream=True,
-                      yes=True)
+            res = _retry(ssh)(
+                instance,
+                cmd='tail -n1 %s' % _stderr_file(arg_num),
+                quiet=True,
+                no_stream=True,
+                yes=True,
+            )
             if res.startswith('exited: '):
                 code = res.split()[-1]
                 if code == '0':
                     logging.info('success: arg_num: %s, instance: %s, session: %s', arg_num, instance.instance_id, session)
-                    results[arg_num] = ssh(instance,
-                                           cmd='cat %s' % _stdout_file(arg_num),
-                                           quiet=True,
-                                           no_stream=True,
-                                           yes=True)
+                    results[arg_num] = _retry(ssh)(
+                        instance,
+                        cmd='cat %s' % _stdout_file(arg_num),
+                        quiet=True,
+                        no_stream=True,
+                        yes=True,
+                    )
                     del active[instance]
                 else:
                     retried[arg_num] += 1
                     if retried[arg_num] < retries:
                         logging.info('retrying: arg_num: %s, instance: %s, retried: %s, session: %s', arg_num, instance.instance_id, retried[arg_num], session)
                         numbered_args.append((arg_num, arg))
+                        time.sleep(retry_sleep)
                     else:
                         logging.info('error: arg_num: %s, instance: %s, retried: %s, session: %s', arg_num, instance.instance_id, retries, session)
                         sys.exit(1)

@@ -1,4 +1,5 @@
 import boto3
+import uuid
 import collections
 import json
 import contextlib
@@ -1252,7 +1253,7 @@ def _spot_price_history(type, kind, days=7):
     # TODO may even be worth reverting to older, simpler behavior,
     # which is cache free, but way simpler. it could also be slightly
     # faster by gather all zone data in a single request cycle,
-    # instead of seperate cycles.
+    # instead of separate cycles.
     # https://github.com/nathants/py-aws/blob/83bf766/aws/ec2.py#L1040
 
     assert kind in _kinds
@@ -1630,25 +1631,27 @@ def _cmd(cmd, arg_num, worker_num):
     cmd = cmd.format(worker_num=worker_num)
     stdout = _stdout_file(arg_num)
     stderr = _stderr_file(arg_num)
-    return 'set +e; export input="$(cat -)"; (echo "%(cmd)s" 1>&2; echo "$input" | (%(cmd)s); echo exited: $? 1>&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
+    stdin = 'stdin.%s' % arg_num
+    return 'set +e; rm -f nohup.* stdin.*; cat - > %(stdin)s; (echo "cat %(stdin)s | (%(cmd)s)" 1>&2; cat %(stdin)s | (%(cmd)s); echo exited: $? 1>&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
 
 
-def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
-         args: 'comma seperated strings which will be supplied as stdin to cmd',
+def pmap(instance_ids: 'comma separated ec2 instance ids to run cmds on',
+         args: 'comma sepa\rated strings which will be supplied as stdin to cmd',
          cmd: '{worker_num} can be used as a unique integer id per worker',
-         retries: 'how many times to retry each arg' = 3):
+         retries: 'how many times to retry each arg' = 10):
     args = args.split(',')
     instance_ids = instance_ids.split(',')
     if instance_ids[0].endswith('.com') or instance_ids[0].count('.') == 3 and instance_ids[0].replace('.', '').isdigit():
         instances = [_instance(tag) for tag in instance_ids]
     else:
-        instances = _ls(instance_ids, state='running')
+        instances = list(_ls(instance_ids, state='running'))
     assert len(instances) == len(instance_ids)
     nums = {instance: i for i, instance in enumerate(instances)}
     active = {}
     results = {}
     numbered_args = list(reversed(list(enumerate(args))))
     retried = collections.Counter()
+    session = str(uuid.uuid4()).split('-')[-1]
     # process every arg
     while numbered_args or active:
         assert len(active) <= len(instances)
@@ -1662,7 +1665,8 @@ def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
                 quiet=True,
                 stdin=arg)
             active[instance] = (arg_num, arg)
-            logging.info('started: arg_num: %s, instance: %s', arg_num, instance.instance_id)
+            logging.info('started: arg_num: %s, instance: %s, session: %s', arg_num, instance.instance_id, session)
+        random.shuffle(instances)
         to_start = [(i, numbered_args.pop())
                     for i in instances
                     if i not in active
@@ -1679,7 +1683,7 @@ def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
             if res.startswith('exited: '):
                 code = res.split()[-1]
                 if code == '0':
-                    logging.info('success: arg_num: %s, instance: %s', arg_num, instance.instance_id)
+                    logging.info('success: arg_num: %s, instance: %s, session: %s', arg_num, instance.instance_id, session)
                     results[arg_num] = ssh(instance,
                                            cmd='cat %s' % _stdout_file(arg_num),
                                            quiet=True,
@@ -1687,12 +1691,12 @@ def pmap(instance_ids: 'comma seperated ec2 instance ids to run cmds on',
                                            yes=True)
                     del active[instance]
                 else:
-                    numbered_args.append((arg_num, arg))
                     retried[arg_num] += 1
                     if retried[arg_num] < retries:
-                        logging.info('retrying: arg_num: %s, instance: %s, retried: %s', arg_num, instance.instance_id, retried[arg_num])
+                        logging.info('retrying: arg_num: %s, instance: %s, retried: %s, session: %s', arg_num, instance.instance_id, retried[arg_num], session)
+                        numbered_args.append((arg_num, arg))
                     else:
-                        logging.info('error: arg_num: %s, instance: %s, retried: %s', arg_num, instance.instance_id, retries)
+                        logging.info('error: arg_num: %s, instance: %s, retried: %s, session: %s', arg_num, instance.instance_id, retries, session)
                         sys.exit(1)
         list(pool.thread.map(check, list(active.items())))
     assert len(results) == len(args), 'mismatch result sizes'

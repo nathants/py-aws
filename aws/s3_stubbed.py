@@ -32,7 +32,7 @@ def rm(url, recursive=False):
                     xs = [x for x in f.read().splitlines() if x.startswith(url)]
             except FileNotFoundError:
                 sys.exit(0)
-        for x in xs:
+        for x in set(xs):
             rm(x)
     else:
         if not os.path.isfile(_cache_path(url)):

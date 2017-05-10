@@ -555,7 +555,8 @@ def stop(*tags, yes=False, first_n=None, last_n=None, wait=False):
 
 
 def rm(*tags, yes=False, first_n=None, last_n=None):
-    assert tags, 'you cannot stop all things, specify some tags'
+    assert tags, 'you cannot rm all things, specify some tags'
+    assert tags != ('*',), 'you cannot rm all things'
     instances = _ls(tags, ['running', 'stopped', 'pending'], first_n, last_n)
     assert instances, 'didnt find any instances for those tags'
     logging.info('going to terminate the following instances:')

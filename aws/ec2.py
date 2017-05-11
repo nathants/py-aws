@@ -907,9 +907,7 @@ def amis_ubuntu(*name_fragments, ena=False, sriov=False):
     filters = [{'Name': 'name',
                 'Values': ['*%s*' % '*'.join(name_fragments)]},
                {'Name': 'architecture',
-                'Values': ['x86_64']},
-               {'Name': 'virtualization-type',
-                'Values': ['hvm']}]
+                'Values': ['x86_64']}]
     if ena:
         filters.append({'Name': 'ena-support',
                         'Values': ['true']})

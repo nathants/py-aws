@@ -288,7 +288,7 @@ def ssh(
     assert tags, 'you must specify some tags'
     if hasattr(tags[0], 'instance_id'):
         instances = tags
-    elif tags[0].endswith('.com') or tags[0].count('.') == 3 and tags[0].replace('.', '').isdigit():
+    elif tags[0].endswith('.com') or tags[0].count('.') == 3 and tags[0].replace('.', '').isdigit() and not tags[0].startswith('10.'):
         instances = [_instance(tag) for tag in tags]
     else:
         instances = _ls(tags, 'running', first_n, last_n)

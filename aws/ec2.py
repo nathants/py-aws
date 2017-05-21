@@ -798,7 +798,7 @@ def authorize(ip, *names, yes=False):
         logging.info('\nwould you like to authorize access to these groups for your ip %s? y/n\n', util.colors.yellow(ip))
         assert pager.getch() == 'y', 'abort'
     with open('/var/log/ec2_auth_ips.log', 'a') as f:
-        f.write(ip + '\n')
+        f.write(ip + ' ' + ','.join(names) + '\n')
     for sg in sgs:
         for proto in ['tcp', 'udp']:
             try:

@@ -120,8 +120,7 @@ def _ls(tags, state='running', first_n=None, last_n=None):
                 filters += [{'Name': 'instance-id', 'Values': tags_chunk}]
                 instances += list(_resource().instances.filter(Filters=filters))
             elif is_sg_id:
-                filters += [{'Name': 'group-id', 'Values': tags_chunk}, # ec2 classic
-                            {'Name': 'instance.group-id', 'Values': tags_chunk}] # ec2 modern
+                filters += [{'Name': 'instance.group-id', 'Values': tags_chunk}] # ec2 modern
                 instances += list(_resource().instances.filter(Filters=filters))
             elif any('*' in tag for tag in tags_chunk):
                 instances += [i for i in _resource().instances.filter(Filters=filters) if _matches(i, tags_chunk)]

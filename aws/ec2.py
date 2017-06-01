@@ -1062,6 +1062,7 @@ def new(name:  'name of the instance',
         sg:    'security group name'         = shell.conf.get_or_prompt_pref('sg',   __file__, message='security group name'),
         type:  'instance type'               = shell.conf.get_or_prompt_pref('type', __file__, message='instance type'),
         vpc:   'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  __file__, message='vpc name'),
+        subnet: 'subnet id'                = None,
         role:  'ec2 iam role'                = None,
         zone:  'ec2 availability zone'       = None,
         gigs:  'gb capacity of primary gp2 disk' = 8,
@@ -1138,7 +1139,10 @@ def new(name:  'name of the instance',
         if zone:
             opts['Placement'] = {'AvailabilityZone': zone}
         if vpc:
-            opts['SubnetId'] = _subnet(vpc, zone)
+            if subnet is not None:
+                opts['SubnetId'] = subnet
+            else:
+                opts['SubnetId'] = _subnet(vpc, zone)
             logging.info('using vpc: %s', vpc)
         else:
             logging.info('using ec2-classic')

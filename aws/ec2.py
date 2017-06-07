@@ -362,6 +362,8 @@ def ssh(
                 logging.info(util.colors.green(' successes: ') + str(len(successes)))
                 logging.info(util.colors.red(' failures: ') + str(len(failures)))
             if failures:
+                for result in results:
+                    print(result)
                 sys.exit(1)
             else:
                 return results

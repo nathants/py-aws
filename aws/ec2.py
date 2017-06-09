@@ -1531,7 +1531,7 @@ def snapshots(regex=None, min_date=None, make_ami=False, yes=False):
             v = vs[0]
             block = _blocks(v['size'])[0]
             block['Ebs']['SnapshotId'] = v['id']
-            name = '%s__%s' % (v['name'], v['date'].replace(':', '_'))
+            name = '%s__%s__%s' % (v['name'], v['instance_id'], v['date'].replace(':', '_'))
             id = _client().register_image(
                 Name=name,
                 Architecture='x86_64',

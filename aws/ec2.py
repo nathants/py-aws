@@ -361,10 +361,10 @@ def ssh(
                 logging.info('\ntotals:')
                 logging.info(util.colors.green(' successes: ') + str(len(successes)))
                 logging.info(util.colors.red(' failures: ') + str(len(failures)))
+            for result in results:
+                print(result)
             if failures:
                 sys.exit(1)
-            else:
-                return results
         elif cmd:
             return shell.run(*make_ssh_cmd(instances[0]),
                              echo=False,

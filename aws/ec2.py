@@ -855,12 +855,20 @@ def amis_all(id_only=False):
         return [ami.image_id for ami in amis]
     else:
         def f(ami):
-            name, date = ami.name.split('__')
-            description = ami.description if ami.description != name else '-'
-            tag = '%(Key)s=%(Value)s' % ami.tags[0] if ami.tags else '-'
-            return ' '.join([name, ami.image_id, date, description, tag])
+            try:
+                name, date = ami.name.split('__')
+            except ValueError:
+                return
+            else:
+                description = ami.description or '-' if ami.description != name else '-'
+                tag = '%(Key)s=%(Value)s' % ami.tags[0] if ami.tags else '-'
+                try:
+                    return ' '.join([name, ami.image_id, date, description, tag])
+                except:
+                    print([name, ami.image_id, date, description, tag], '???')
         logging.info('id date description tag')
-        return [f(ami) for ami in amis]
+        xs = [f(ami) for ami in amis]
+        return [x for x in xs if x]
 
 
 def amis(name, *tags, id_only=False, most_recent=False):

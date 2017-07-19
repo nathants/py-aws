@@ -1646,7 +1646,7 @@ def _cmd(cmd, arg_num, worker_num):
 
 
 def pmap(instance_ids: 'comma separated ec2 instance ids to run cmds on',
-         args: 'comma sepa\rated strings which will be supplied as stdin to cmd',
+         args: 'comma separated strings which will be supplied as stdin to cmd',
          cmd: '{worker_num} can be used as a unique integer id per worker',
          retries: 'how many times to retry each arg' = 10,
          retry_sleep: 'seconds to sleep before retrying' = 30):

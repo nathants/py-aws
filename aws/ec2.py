@@ -609,7 +609,7 @@ def _wait_for_ssh(*instances, seconds=0):
             running_ids = ' '.join([i.instance_id for i in running])
             res = shell.run('ec2 ssh', running_ids, '--batch-mode -t 10 -yc "whoami>/dev/null" 2>&1', warn=True)
             ready_ids = [x.split()[-1]
-                         for x in res['output'].splitlines()
+                         for x in res['stdout'].splitlines()
                          if x.startswith('success: ')]
             num_ready = len(ready_ids)
             num_not_ready = len(instances) - num_ready

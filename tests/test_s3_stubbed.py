@@ -109,7 +109,14 @@ def test_listing():
     assert rm_whitespace(run(preamble, 'ls bucket/listing/d')) == rm_whitespace("""
           PRE dir1/
     """)
+    assert rm_whitespace(run(preamble, 'ls bucket/listing/')) == rm_whitespace("""
+          PRE dir1/
+    """)
     assert rm_whitespace(run(preamble, 'ls bucket/listing/d --recursive')) == rm_whitespace("""
+        _ _ _ listing/dir1/dir2/key2.txt
+        _ _ _ listing/dir1/key1.txt
+    """)
+    assert rm_whitespace(run(preamble, 'ls bucket/listing/ --recursive')) == rm_whitespace("""
         _ _ _ listing/dir1/dir2/key2.txt
         _ _ _ listing/dir1/key1.txt
     """)

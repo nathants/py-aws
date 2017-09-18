@@ -363,8 +363,7 @@ def ssh(
                 logging.info(util.colors.red(' failures: ') + str(len(failures)))
             for result in results:
                 print(result)
-            if failures:
-                sys.exit(1)
+            assert not failures, failures
         elif cmd:
             return shell.run(*make_ssh_cmd(instances[0]),
                              echo=False,
@@ -376,7 +375,7 @@ def ssh(
         else:
             subprocess.check_call(ssh_cmd + [user + '@' + instances[0].public_dns_name])
     except:
-        sys.exit(1)
+        raise
 
 
 def _make_callback(instance, quiet, append=None, no_stream=False):
@@ -1645,6 +1644,7 @@ def _cmd(cmd, arg_num, worker_num):
     return 'set +e; rm -f nohup.* stdin.*; cat - > %(stdin)s; (echo "cat %(stdin)s | (%(cmd)s)" 1>&2; cat %(stdin)s | (%(cmd)s); echo exited: $? 1>&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
 
 
+# TODO should print an eta based on rate of args and total args
 def pmap(instance_ids: 'comma separated ec2 instance ids to run cmds on',
          args: 'comma separated strings which will be supplied as stdin to cmd',
          cmd: '{worker_num} can be used as a unique integer id per worker',
@@ -1707,13 +1707,11 @@ def pmap(instance_ids: 'comma separated ec2 instance ids to run cmds on',
                     del active[instance]
                 else:
                     retried[arg_num] += 1
-                    if retried[arg_num] < retries:
-                        logging.info('retrying: arg_num: %s, instance: %s, retried: %s, session: %s', arg_num, instance.instance_id, retried[arg_num], session)
-                        numbered_args.append((arg_num, arg))
-                        time.sleep(retry_sleep)
-                    else:
-                        logging.info('error: arg_num: %s, instance: %s, retried: %s, session: %s', arg_num, instance.instance_id, retries, session)
-                        sys.exit(1)
+                    assert retried[arg_num] < retries, 'error: arg_num: %s, instance: %s, retried: %s, session: %s' % (arg_num, instance.instance_id, retries, session)
+                    logging.info('retrying: arg_num: %s, instance: %s, retried: %s, session: %s', arg_num, instance.instance_id, retried[arg_num], session)
+                    numbered_args.append((arg_num, arg))
+                    time.sleep(retry_sleep)
+
         list(pool.thread.map(check, list(active.items())))
     assert len(results) == len(args), 'mismatch result sizes'
     return [results[arg_num] for arg_num, _ in enumerate(args)]

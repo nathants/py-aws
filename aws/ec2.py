@@ -1167,8 +1167,9 @@ def new(name:  'name of the instance',
             Tags=[{'Key': 'Name', 'Value': name},
                   {'Key': 'owner', 'Value': owner},
                   {'Key': 'creation-date', 'Value': _now()},
-                  {'Key': 'num', 'Value': str(num)}],
-        )
+                  {'Key': 'num', 'Value': str(num)}] + [{'Key': k, 'Value': v}
+                                                        for tag in tags
+                                                        for k, v in [tag.split('=')]])
         if no_wait:
             break
         else:

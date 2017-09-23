@@ -544,9 +544,7 @@ def stop(*tags, yes=False, first_n=None, last_n=None, wait=False):
     if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-    for i in instances:
-        i.stop()
-        logging.info('stopped: %s', _pretty(i))
+    _retry(_client().stop_instances)(InstanceIds=[i.instance_id for i in instances])
     if wait:
         logging.info('waiting for all to stop')
         _wait_for_state('stopped', *instances)
@@ -563,9 +561,7 @@ def rm(*tags, yes=False, first_n=None, last_n=None):
     if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-    for i in instances:
-        i.terminate()
-        logging.info('terminated: %s', _pretty(i))
+    _retry(_client().terminate_instances)(InstanceIds=[i.instance_id for i in instances])
 
 
 def _ls_by_ids(*ids):
@@ -663,11 +659,10 @@ def tag(ls_tags, set_tags, yes=False, first_n=None, last_n=None):
     if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-    for i in instances:
-        for t in set_tags.split(','):
-            k, v = t.split('=')
-            _retry(i.create_tags)(Tags=[{'Key': k, 'Value': v}])
-            logging.info('tagged: %s', _pretty(i))
+    _retry(_client().create_tags)(
+        Resources=[i.instance_id for i in instances],
+        Tags=[{'Key': k, 'Value': v} for t in set_tags.split(',') for k, v in [t.split('=')]]
+    )
 
 
 def wait(*tags, state='running', yes=False, first_n=None, last_n=None, ssh=False):
@@ -700,9 +695,7 @@ def reboot(*tags, yes=False, first_n=None, last_n=None):
     if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-    for i in instances:
-        i.reboot()
-        logging.info('rebooted: %s', _pretty(i))
+    _client().reboot_instances(InstanceIds=[i.instance_id for i in instances])
 
 
 def _has_wildcard_permission(sg, ip):
@@ -1169,19 +1162,13 @@ def new(name:  'name of the instance',
             logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
             instances = _resource().create_instances(**opts)
         logging.info('instances:\n%s', '\n'.join([i.instance_id for i in instances]))
-        date = _now()
-        for n, i in enumerate(instances):
-            set_tags = [{'Key': 'Name', 'Value': name},
-                        {'Key': 'owner', 'Value': owner},
-                        {'Key': 'creation-date', 'Value': date}]
-            if len(instances) > 1:
-                set_tags += [{'Key': 'nth', 'Value': str(n)},
-                             {'Key': 'num', 'Value': str(num)}]
-            for tag in tags:
-                k, v = tag.split('=')
-                set_tags.append({'Key': k, 'Value': v})
-            _retry(i.create_tags)(Tags=set_tags)
-            logging.info('tagged: %s', _pretty(i))
+        _retry(_client().create_tags)(
+            Resources=[i.instance_id for i in instances],
+            Tags=[{'Key': 'Name', 'Value': name},
+                  {'Key': 'owner', 'Value': owner},
+                  {'Key': 'creation-date', 'Value': _now()},
+                  {'Key': 'num', 'Value': str(num)}],
+        )
         if no_wait:
             break
         else:
@@ -1364,9 +1351,7 @@ def start(*tags, yes=False, first_n=None, last_n=None, login=False, wait=False):
     if is_cli and not yes:
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
-    for i in instances:
-        i.start()
-        logging.info('started: %s', _pretty(i))
+    _retry(_client().start_instances)(InstanceIds=[i.instance_id for i in instances])
     if login:
         assert len(instances) == 1, util.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         instances[0].wait_until_running()

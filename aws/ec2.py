@@ -43,7 +43,7 @@ def _now():
 
 def _retry(f):
     """
-    retry and idempotent fn a few times
+    retry an idempotent fn a few times
     """
     def fn(*a, **kw):
         for i in itertools.count():
@@ -363,7 +363,7 @@ def ssh(
                 logging.info(util.colors.red(' failures: ') + str(len(failures)))
             for result in results:
                 print(result)
-            assert not failures, failures
+            assert not failures
         elif cmd:
             return shell.run(*make_ssh_cmd(instances[0]),
                              echo=False,
@@ -1053,7 +1053,8 @@ sudo mount -o discard /dev/nvme0n1p1 /mnt
 sudo chown -R ubuntu:ubuntu /mnt
 """
 
-
+# TODO switch to spot fleets for creating spot instances
+# TODO switch to TagSpecifications in create_instances() and create_spot_fleet() so we can set tags at creation time
 def new(name:  'name of the instance',
         *tags: 'tags to set as "<key>=<value>"',
         key:   'key pair name'               = shell.conf.get_or_prompt_pref('key',  __file__, message='key pair name'),

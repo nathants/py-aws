@@ -1,4 +1,5 @@
 import boto3
+import hashlib
 import uuid
 import collections
 import json
@@ -1615,20 +1616,28 @@ def reserved_usage():
     return json.dumps(usage, indent=4)
 
 
-def _stderr_file(arg_num):
-    return 'nohup.%(arg_num)s.stderr' % locals()
+def _stderr_file(arg_num, cmd):
+    cmd_hash = hashlib.sha1(bytes(cmd, 'utf-8')).hexdigest()
+    return 'nohup.%(cmd_hash)s.%(arg_num)s.stderr' % locals()
 
 
-def _stdout_file(arg_num):
-    return 'nohup.%(arg_num)s.stdout' % locals()
+def _stdout_file(arg_num, cmd):
+    cmd_hash = hashlib.sha1(bytes(cmd, 'utf-8')).hexdigest()
+    return 'nohup.%(cmd_hash)s.%(arg_num)s.stdout' % locals()
+
+
+def _stdin_file(arg_num, cmd):
+    cmd_hash = hashlib.sha1(bytes(cmd, 'utf-8')).hexdigest()
+    return 'stdin.%(cmd_hash)s.%(arg_num)s' % locals()
 
 
 def _cmd(cmd, arg_num, worker_num):
-    cmd = cmd.format(worker_num=worker_num)
-    stdout = _stdout_file(arg_num)
-    stderr = _stderr_file(arg_num)
-    stdin = 'stdin.%s' % arg_num
-    return 'set +e; rm -f nohup.* stdin.*; cat - > %(stdin)s; (echo "cat %(stdin)s | (%(cmd)s)" 1>&2; cat %(stdin)s | (%(cmd)s); echo exited: $? 1>&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
+    _cmd = cmd.format(worker_num=worker_num)
+    stdout = _stdout_file(arg_num, cmd)
+    stderr = _stderr_file(arg_num, cmd)
+    stdin = _stdin_file(arg_num, cmd)
+    cmd_hash = stdin.split('.')[1]
+    return 'set +e; cat - > %(stdin)s; echo "%(cmd_hash)s: %(cmd)s" >> cmds.log; (echo "cat %(stdin)s | (%(_cmd)s)" 1>&2; cat %(stdin)s | (%(_cmd)s); echo exited: $? 1>&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
 
 
 # TODO should print an eta based on rate of args and total args
@@ -1675,7 +1684,7 @@ def pmap(instance_ids: 'comma separated ec2 instance ids to run cmds on',
             instance, (arg_num, arg) = x
             res = _retry(ssh)(
                 instance,
-                cmd='tail -n1 %s' % _stderr_file(arg_num),
+                cmd='tail -n1 %s' % _stderr_file(arg_num, cmd),
                 quiet=True,
                 no_stream=True,
                 yes=True,
@@ -1686,7 +1695,7 @@ def pmap(instance_ids: 'comma separated ec2 instance ids to run cmds on',
                     logging.info('success: arg_num: %s, instance: %s, session: %s', arg_num, instance.instance_id, session)
                     results[arg_num] = _retry(ssh)(
                         instance,
-                        cmd='cat %s' % _stdout_file(arg_num),
+                        cmd='cat %s' % _stdout_file(arg_num, cmd),
                         quiet=True,
                         no_stream=True,
                         yes=True,

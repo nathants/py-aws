@@ -163,9 +163,14 @@ def new(name,
         zone, _ = aws.ec2.cheapest_zone(slave_type, days=spot_days)
         logging.info('using zone: %s', zone)
         instances['Placement'] = {'AvailabilityZone': zone}
-    set_tags = [{'Key': 'owner', 'Value': owner}]
+    set_tags = [
+        {'Key': 'owner', 'Value': owner},
+        {'Key': 'Name', 'Value': "emr-{}-cluster".format(name)},
+        {'Key': 'group', 'Value': 'emr'}
+    ]
     for tag in tags:
         k, v = tag.split('=')
+        assert k not in ['owner', 'Name', 'group'], "reserved tag, the tag {} is set by the system".format(k)
         set_tags.append({'Key': k, 'Value': v})
     resp = _client().run_job_flow(Name=name,
                                   ReleaseLabel=release_label,
@@ -173,7 +178,8 @@ def new(name,
                                   Applications=[{'Name': application.capitalize()}],
                                   VisibleToAllUsers=True,
                                   JobFlowRole=job_flow_role,
-                                  ServiceRole=service_role)
+                                  ServiceRole=service_role,
+                                  Tags=set_tags)
     cluster_id = resp['JobFlowId']
     return cluster_id
 

@@ -116,6 +116,7 @@ def add_step(cluster_id, name, *args):
 
 
 def new(name,
+        *tags,
         application='hive',
         auto_shutdown=False,
         release_label='emr-5.3.1',
@@ -131,10 +132,13 @@ def new(name,
         service_role='EMR_DefaultRole'):
     assert master_type.split('.')[0] in ['m3', 'c3'], 'must use non-vpc types, this function is not setup to deal with ebs or vpc right now'
     assert slave_type.split('.')[0] in ['m3', 'c3'], 'must use non-vpc types, this function is not setup to deal with ebs or vpc right now'
+    for tag in tags:
+        assert '=' in tag, 'bad tag, should be key=value, not: %s' % tag
     if not sg_master.startswith('sg-'):
         sg_master = aws.ec2.sg_id(sg_master)
     if not sg_slave.startswith('sg-'):
         sg_slave = aws.ec2.sg_id(sg_slave)
+    owner = shell.run('whoami')
     instance_groups = [{'Name': 'Master',
                         'InstanceRole': 'MASTER',
                         'InstanceType': master_type,
@@ -159,6 +163,10 @@ def new(name,
         zone, _ = aws.ec2.cheapest_zone(slave_type, days=spot_days)
         logging.info('using zone: %s', zone)
         instances['Placement'] = {'AvailabilityZone': zone}
+    set_tags = [{'Key': 'owner', 'Value': owner}]
+    for tag in tags:
+        k, v = tag.split('=')
+        set_tags.append({'Key': k, 'Value': v})
     resp = _client().run_job_flow(Name=name,
                                   ReleaseLabel=release_label,
                                   Instances=instances,

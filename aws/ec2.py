@@ -474,7 +474,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_t
 
 
 # TODO stop using bash -s
-def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
+def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, user='ubuntu'):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly one instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
@@ -482,7 +482,7 @@ def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
     logging.info('targeting:\n %s', _pretty(instance))
     host = instance.public_dns_name
     script = _tar_script(src, name, echo_only=True)
-    cmd = ('cat %(script)s |ssh' + ssh_args + 'ubuntu@%(host)s bash -s') % locals()
+    cmd = ('cat %(script)s |ssh' + ssh_args + user + '@%(host)s bash -s') % locals()
     logging.info('going to pull:')
     logging.info(util.strings.indent(shell.check_output(cmd), 1))
     shell.check_call('rm -rf', os.path.dirname(script))
@@ -490,7 +490,7 @@ def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
     script = _tar_script(src, name)
-    cmd = ('cd %(dst)s && cat %(script)s | ssh' + ssh_args + 'ubuntu@%(host)s bash -s | tar xf -') % locals()
+    cmd = ('cd %(dst)s && cat %(script)s | ssh' + ssh_args + user + '@%(host)s bash -s | tar xf -') % locals()
     try:
         shell.check_call(cmd)
     except:

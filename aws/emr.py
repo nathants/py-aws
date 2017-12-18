@@ -87,6 +87,10 @@ def push(src, dst, cluster_id):
     aws.ec2.push(src, dst, master_instance_id(cluster_id), user='hadoop', yes=True)
 
 
+def pull(src, dst, cluster_id):
+    aws.ec2.pull(src, dst, master_instance_id(cluster_id), user='hadoop', yes=True)
+
+
 def describe(cluster_id):
     resp = _client().describe_cluster(
         ClusterId=cluster_id
@@ -119,19 +123,21 @@ def new(name,
         *tags,
         application='hive',
         auto_shutdown=False,
-        release_label='emr-5.3.1',
+        release_label='emr-5.10.0',
         master_type='m3.xlarge',
         slave_type='m3.xlarge',
-        slave_count=30,
+        slave_count=10,
         spot: 'spot bid, if 0 use on-demand instead of spot' = '.15',
         spot_days: 'how many days to check for spot prices when determining the cheapest zone' = 2,
         key=shell.conf.get_or_prompt_pref('key',  __file__, message='key pair name'),
         sg_master=shell.conf.get_or_prompt_pref('sg_master',  __file__, message='security group master node'),
         sg_slave=shell.conf.get_or_prompt_pref('sg_slave',  __file__, message='security group slave nodes'),
+        vpc: 'vpc name' = shell.conf.get_or_prompt_pref('vpc',  __file__, message='vpc name'),
+        subnet: 'subnet id' = None,
         job_flow_role='EMR_EC2_DefaultRole',
         service_role='EMR_DefaultRole'):
-    assert master_type.split('.')[0] in ['m3', 'c3'], 'must use non-vpc types, this function is not setup to deal with ebs or vpc right now'
-    assert slave_type.split('.')[0] in ['m3', 'c3'], 'must use non-vpc types, this function is not setup to deal with ebs or vpc right now'
+    assert master_type.split('.')[0] in ['m3', 'i3'], 'must use non-vpc types, this function is not setup to deal with ebs or vpc right now'
+    assert slave_type.split('.')[0] in ['m3', 'i3'], 'must use non-vpc types, this function is not setup to deal with ebs or vpc right now'
     for tag in tags:
         assert '=' in tag, 'bad tag, should be key=value, not: %s' % tag
     if not sg_master.startswith('sg-'):
@@ -162,7 +168,12 @@ def new(name,
             i['BidPrice'] = spot
         zone, _ = aws.ec2.cheapest_zone(slave_type, days=spot_days)
         logging.info('using zone: %s', zone)
-        instances['Placement'] = {'AvailabilityZone': zone}
+        if not vpc and not subnet:
+            instances['Placement'] = {'AvailabilityZone': zone}
+        elif subnet:
+            instances['Ec2SubnetId'] = subnet
+        else:
+            instances['Ec2SubnetId'] = aws.ec2._subnet(vpc, zone)
     set_tags = [
         {'Key': 'owner', 'Value': owner},
         {'Key': 'Name', 'Value': "emr-{}-cluster".format(name)},

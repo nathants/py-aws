@@ -32,9 +32,9 @@ def _region(name):
         boto3.DEFAULT_SESSION = session
 
 
-def ls(state=None):
+def ls(state: 'use "all" to see everything' = 'running'):
     kw = {}
-    if state:
+    if state.lower() != 'all':
         assert state.upper() in ['STARTING', 'BOOTSTRAPPING', 'RUNNING', 'WAITING', 'TERMINATING', 'TERMINATED', 'TERMINATED_WITH_ERRORS']
         kw['ClusterStates'] = [state.upper()]
     logging.info('name id instance-hours state creation-date')

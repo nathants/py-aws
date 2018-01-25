@@ -1,4 +1,5 @@
 import boto3
+import pager
 import json
 import contextlib
 import logging
@@ -32,10 +33,14 @@ def _region(name):
         boto3.DEFAULT_SESSION = session
 
 
-def delete_table(name):
+def delete_table(name, yes=False):
     """
     delete tables
     """
+    logging.info('going to delete table: %s', name)
+    if is_cli and not yes:
+        logging.info('\nwould you like to proceed? y/n\n')
+        assert pager.getch() == 'y', 'abort'
     _client().delete_table(TableName=name)
 
 

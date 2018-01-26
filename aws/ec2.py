@@ -174,6 +174,7 @@ def _pretty(instance, ip=False, all_tags=False):
             instance.instance_type,
             instance.state['Name'],
             instance.instance_id,
+            instance.image_id,
             ('spot' if instance.spot_instance_request_id else 'ondemand'),
             instance.placement['AvailabilityZone'],
             (instance.public_dns_name or '<no-ip>' if ip else None),

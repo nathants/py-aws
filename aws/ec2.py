@@ -181,7 +181,7 @@ def _pretty(instance, ip=False, all_tags=False):
             ','.join([x['GroupName'] for x in instance.security_groups]),
             ' '.join('%s=%s' % (k, v)
                      for k, v in sorted(_tags(instance).items(), key=lambda x: x[0])
-                     if (all_tags or k not in ['Name', 'creation-date', 'owner', 'launch'])
+                     if (all_tags or k not in ['Name', 'creation-date', 'owner', 'launch', 'aws:ec2spot:fleet-request-id'])
                      and v),
         ]))
     return f()
@@ -958,44 +958,35 @@ def _blocks(gigs, gigs_st1=None):
     return blocks
 
 
-def _tear_down_spot_instances(request_ids):
-    _client().cancel_spot_instance_requests(SpotInstanceRequestIds=request_ids)
-    logging.info('cancelled spot requests:\n%s', '\n'.join(request_ids))
-    xs = _client().describe_spot_instance_requests(SpotInstanceRequestIds=request_ids)['SpotInstanceRequests']
+def _tear_down_spot_instances(request_id):
+    _client().cancel_spot_fleet_requests(SpotFleetRequestIds=[request_id], TerminateInstances=True)
+    logging.info('cancelled spot fleet request:\n%s', request_id)
+    xs = _client().describe_spot_fleet_instances(SpotFleetRequestId=request_id)['ActiveInstances']
     xs = [x.get('InstanceId') for x in xs]
     xs = [x for x in xs if x]
     if xs:
+        wait(*xs, yes=True)
         rm(*xs, yes=True)
 
 
 # TODO have a max seconds before returning whatever came up and terminating the
 # rest, just like wait-for-ssh
 def _create_spot_instances(**opts):
-    request_ids = [x['SpotInstanceRequestId'] for x in _client().request_spot_instances(**opts)['SpotInstanceRequests']]
-    logging.info("wait for spot request to be filled for ids:\n%s", '\n'.join(request_ids))
-    last = None
+    request_id = _client().request_spot_fleet(SpotFleetRequestConfig=opts)['SpotFleetRequestId']
+    logging.info("wait for spot request to be filled for fleet:\n%s", request_id)
     try:
         for _ in range(300):
-            xs = _retry(_client().describe_spot_instance_requests)(SpotInstanceRequestIds=request_ids)['SpotInstanceRequests']
-            states = [x['State'] for x in xs]
-            if {'cancelled', 'closed', 'failed'} & set(states):
-                for kind in ['Fault', 'Status']:
-                    for msg in {x.get(kind, {}).get('Message') for x in xs}:
-                        if msg:
-                            logging.info(kind.lower() + ': %s', msg)
-                raise AssertionError('some requests failed')
-            elif {'active'} == set(states) and all(x.get('InstanceId') for x in xs):
+            xs = _retry(_client().describe_spot_fleet_instances)(SpotFleetRequestId=request_id)['ActiveInstances']
+            if len(xs) == opts['TargetCapacity']:
                 break
             else:
-                current = len([x for x in states if x == 'open'])
-                if current != last:
-                    logging.info('waiting for %s requests', current)
-                    last = current
+                current = len(xs)
+                logging.info('waiting for %s requests', opts['TargetCapacity'] - current)
                 time.sleep(4 + random.random())
         else:
             raise AssertionError('failed to wait for spot requests')
     except:
-        _tear_down_spot_instances(request_ids)
+        _tear_down_spot_instances(request_id)
         raise
     else:
         instance_ids = [x['InstanceId'] for x in xs]
@@ -1007,12 +998,21 @@ def _create_spot_instances(**opts):
         raise Exception('failed to get the right number of instances')
 
 
-def _make_spot_opts(spot, opts):
+def _make_spot_opts(spot, opts, fleet_role):
+    if 'arn' not in fleet_role:
+        fleet_role = _retry(boto3.client('iam').get_role)(RoleName=fleet_role)['Role']['Arn']
     spot_opts = {}
+    spot_opts['Type'] = 'request'
+    spot_opts['ReplaceUnhealthyInstances'] = False
+    spot_opts['InstanceInterruptionBehavior'] = 'terminate'
+    spot_opts['TerminateInstancesWithExpiration'] = False
     spot_opts['SpotPrice'] = str(float(spot))
-    spot_opts['InstanceCount'] = opts['MaxCount']
-    spot_opts['LaunchSpecification'] = util.dicts.drop(opts, ['MaxCount', 'MinCount'])
-    spot_opts = util.dicts.update_in(spot_opts, ['LaunchSpecification', 'UserData'], util.strings.b64_encode)
+    spot_opts['IamFleetRole'] = fleet_role
+    spot_opts['TargetCapacity'] = opts['MaxCount']
+    opts['SecurityGroups'] = [{'GroupId': x} for x in opts['SecurityGroupIds']]
+    opts = util.dicts.drop(opts, ['MaxCount', 'MinCount', 'SecurityGroupIds'])
+    opts['UserData'] = util.strings.b64_encode(opts['UserData'])
+    spot_opts['LaunchSpecifications'] = [opts]
     return spot_opts
 
 
@@ -1055,32 +1055,35 @@ sudo mount -o discard /dev/nvme0n1p1 /mnt
 sudo chown -R ubuntu:ubuntu /mnt
 """
 
+
 # TODO switch to spot fleets for creating spot instances
 # TODO switch to TagSpecifications in create_instances() and create_spot_fleet() so we can set tags at creation time
-def new(name:  'name of the instance',
+def new(name: 'name of the instance',
         *tags: 'tags to set as "<key>=<value>"',
-        key:   'key pair name'               = shell.conf.get_or_prompt_pref('key',  __file__, message='key pair name'),
-        ami:   'ami id'                      = shell.conf.get_or_prompt_pref('ami',  __file__, message='ami id'),
-        sg:    'security group name'         = shell.conf.get_or_prompt_pref('sg',   __file__, message='security group name'),
-        type:  'instance type'               = shell.conf.get_or_prompt_pref('type', __file__, message='instance type'),
-        vpc:   'vpc name'                    = shell.conf.get_or_prompt_pref('vpc',  __file__, message='vpc name'),
-        subnet: 'subnet id'                = None,
-        role:  'ec2 iam role'                = None,
-        zone:  'ec2 availability zone'       = None,
-        gigs:  'gb capacity of primary gp2 disk' = 8,
-        gigs_st1:  'gb capacity of secondary st1 disk' = 0,
-        init:  'cloud init command'          = _default_init,
-        data:  'arbitrary user-data'         = None,
-        cmd:   'ssh command'                 = None,
-        num:   'number of instances'         = 1,
-        spot:  'spot price to bid'           = None,
-        spot_days: 'how many days to check for spot prices when determining the cheapest zone' = 2,
-        tty:   'run cmd in a tty'            = False,
-        no_wait: 'do not wait for ssh'       = False,
-        seconds: ('how many seconds to wait for ssh before '
-                  'continuing with however many instances '
-                  'became available and terminating the rest') = 0,
-        login: 'login into the instance'     = False):
+        key: 'key pair name'                          = shell.conf.get_or_prompt_pref('key',  __file__, message='key pair name'),
+        ami: 'ami id'                                 = shell.conf.get_or_prompt_pref('ami',  __file__, message='ami id'),
+        sg: 'security group name'                     = shell.conf.get_or_prompt_pref('sg',   __file__, message='security group name'),
+        type: 'instance type'                         = shell.conf.get_or_prompt_pref('type', __file__, message='instance type'),
+        vpc: 'vpc name'                               = shell.conf.get_or_prompt_pref('vpc',  __file__, message='vpc name'),
+        subnet: 'subnet id'                           = None,
+        role: 'ec2 instance iam role'                 = None,
+        fleet_role: 'ec2 spot fleet iam role'         = 'aws-ec2-spot-fleet-tagging-role',
+        zone: 'ec2 availability zone'                 = None,
+        gigs: 'gb capacity of primary gp2 disk'       = 8,
+        gigs_st1: 'gb capacity of secondary st1 disk' = 0,
+        init: 'cloud init command'                    = _default_init,
+        data: 'arbitrary user-data'                   = None,
+        cmd: 'ssh command'                            = None,
+        num: 'number of instances'                    = 1,
+        spot:  'spot price to bid'                    = None,
+        spot_days: 'num days for spot price check'    = 2,
+        tty:   'run cmd in a tty'                     = False,
+        no_wait: 'do not wait for ssh'                = False,
+        login: 'login in to the instance'             = False,
+        seconds: ('how many seconds to wait for ssh '
+                  'before continuing with however '
+                  'many instances became available '
+                  'and terminating the rest')         = 0):
     if spot:
         spot = float(spot)
     num = int(num)
@@ -1101,6 +1104,7 @@ def new(name:  'name of the instance',
         assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
         init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash -e $path /var/log/cloud_init_script.log 2>&1' % util.strings.b64_encode(init)
     if ami in ubuntus:
+        logging.info('fetch latest ami for: %s', ami)
         distro = ami
         images = ubuntus_pv if type.split('.')[0] in ['t1', 'm1'] else ubuntus_hvm_ssd
         ami, _ = [x for x in amis_ubuntu() if images[distro] in x][0].split()
@@ -1121,20 +1125,23 @@ def new(name:  'name of the instance',
     opts['SecurityGroupIds'] = [x.id for x in _sgs(names=[sg])]
     opts['InstanceType'] = type
     opts['BlockDeviceMappings'] = _blocks(gigs, gigs_st1)
+    opts['TagSpecifications'] = [{'ResourceType': 'instance',
+                                  'Tags': [{'Key': 'Name', 'Value': name},
+                                           {'Key': 'owner', 'Value': owner},
+                                           {'Key': 'creation-date', 'Value': _now()},
+                                           {'Key': 'num', 'Value': str(num)}] + [{'Key': k, 'Value': v}
+                                                                                 for tag in tags
+                                                                                 for k, v in [tag.split('=')]]}]
     if role:
         opts['IamInstanceProfile'] = {'Name': role}
-
     # TODO something like this, but a generator. when spinning up lots of
     # instances, returns them as they become available, retrying failed
     # ones and returning those later. excepts if is ultimately unable to
     # spin up everybody.
-
     # TODO is this like a threadpool of ec2? with an as_completed iterator?
-
     # TODO do a more surgical retry. dont rm all and start over. keep
     # the good ones, and start over for only as many new ones as we
     # need to fulfill the originally requested number.
-
     if spot and zone is None:
         zone, _, = cheapest_zone(type, kind='vpc' if vpc else 'classic', days=spot_days)
     for _ in range(5):
@@ -1148,9 +1155,8 @@ def new(name:  'name of the instance',
             logging.info('using vpc: %s', vpc)
         else:
             logging.info('using ec2-classic')
-
         if spot:
-            spot_opts = _make_spot_opts(spot, opts)
+            spot_opts = _make_spot_opts(spot, opts, fleet_role)
             logging.info('request spot instances:\n' + pprint.pformat(util.dicts.drop_in(spot_opts, ['LaunchSpecification', 'UserData'])))
             # TODO improve the wait-for-spot-fullfillment logic inside _create_spot_instances()
             # TODO currently this can error, which is not so good. compared to _resource().create_instances().
@@ -1165,14 +1171,6 @@ def new(name:  'name of the instance',
             logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
             instances = _resource().create_instances(**opts)
         logging.info('instances:\n%s', '\n'.join([i.instance_id for i in instances]))
-        _retry(_client().create_tags)(
-            Resources=[i.instance_id for i in instances],
-            Tags=[{'Key': 'Name', 'Value': name},
-                  {'Key': 'owner', 'Value': owner},
-                  {'Key': 'creation-date', 'Value': _now()},
-                  {'Key': 'num', 'Value': str(num)}] + [{'Key': k, 'Value': v}
-                                                        for tag in tags
-                                                        for k, v in [tag.split('=')]])
         if no_wait:
             break
         else:
@@ -1181,12 +1179,14 @@ def new(name:  'name of the instance',
                 break
             except KeyboardInterrupt:
                 try:
+                    wait(*[i.instance_id for i in instances], yes=True)
                     rm(*[i.instance_id for i in instances], yes=True)
                 except AssertionError:
                     pass # when $seconds, and no instances where ready, everything has already been terminated, and rm fails an assert
                 raise
             except:
                 try:
+                    wait(*[i.instance_id for i in instances], yes=True)
                     rm(*[i.instance_id for i in instances], yes=True)
                 except AssertionError:
                     pass # when $seconds, and no instances where ready, everything has already been terminated, and rm fails an assert
@@ -1207,9 +1207,11 @@ def new(name:  'name of the instance',
     logging.info('done')
     return [i.instance_id for i in ready_instances]
 
+
 # TODO this can probably be cached for some time period
 def regions():
     return [x['RegionName'] for x in _client().describe_regions()['Regions']]
+
 
 # TODO this can probably be cached for some time period
 def zones():
@@ -1218,6 +1220,7 @@ def zones():
 
 _kinds = {'classic': 'Linux/UNIX',
           'vpc': 'Linux/UNIX (Amazon VPC)'}
+
 
 _kinds_reverse = {v: k for k, v in _kinds.items()}
 
@@ -1249,13 +1252,11 @@ def _spot_price_history(type, kind, days=7):
     # cached range. the assumption is that when used frequently, there
     # will always be cached historical data, and so this model will be
     # fine.
-
     # TODO may even be worth reverting to older, simpler behavior,
     # which is cache free, but way simpler. it could also be slightly
     # faster by gather all zone data in a single request cycle,
     # instead of separate cycles.
     # https://github.com/nathants/py-aws/blob/83bf766/aws/ec2.py#L1040
-
     assert kind in _kinds
     dates = list(_chunk_by_day(days))
     cacheable_dates = dates[:-1] # everything but the latest is a 24hr period
@@ -1326,6 +1327,7 @@ def _get_spot_price(type, kind, start, end):
             token = res['NextToken']
         else:
             break
+
 
 def max_spot_price(type, kind: 'classic|vpc' = 'classic', days=7):
     if type.split('.')[0] in ['i3', 'm4', 'c4', 'r4', 'x1', 't2', 'm5', 'c5']:
@@ -1399,6 +1401,17 @@ def ami(*tags, yes=False, first_n=None, last_n=None, no_wait=False, name=None, d
         # TODO these waiters are useless. remove.
         _client().get_waiter('image_available').wait(ImageIds=[ami_id])
     return ami_id
+
+
+def spot_fleets(*ids):
+    resp = _client().describe_spot_fleet_requests()
+    for fleet in sorted(resp['SpotFleetRequestConfigs'], key=lambda x: x['CreateTime'], reverse=True):
+        yield ' '.join(map(str, [
+            fleet['CreateTime'].strftime('%Y-%m-%dT%H:%M:%S'),
+            fleet['SpotFleetRequestId'],
+            fleet['SpotFleetRequestState'],
+            fleet['SpotFleetRequestConfig']['TargetCapacity'],
+        ]))
 
 
 def spot_requests(*ids, state: 'open | active | closed | cancelled | failed' = None):
@@ -1531,6 +1544,7 @@ def snapshots(regex=None, min_date=None, make_ami=False, yes=False):
             print(name, id)
     else:
         return res
+
 
 def num_volumes(*tags, first_n=None, last_n=None, yes=False):
     assert tags, 'you must specify some tags'

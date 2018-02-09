@@ -1,4 +1,5 @@
 import boto3
+import requests
 import hashlib
 import uuid
 import collections
@@ -1145,7 +1146,9 @@ def new(name: 'name of the instance',
             init += _timeout_init.format(seconds_timeout)
         assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
         init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash -e $path /var/log/cloud_init_script.log 2>&1' % util.strings.b64_encode(init)
-    if ami in ubuntus:
+    if ami == 'lambda':
+        ami = _lambda_ami()
+    elif ami in ubuntus:
         logging.info('fetch latest ami for: %s', ami)
         distro = ami
         images = ubuntus_pv if type.split('.')[0] in ['t1', 'm1'] else ubuntus_hvm_ssd
@@ -1784,3 +1787,12 @@ def main():
             if e.args:
                 logging.info(util.colors.red(e.args[0]))
             sys.exit(1)
+
+
+def _lambda_ami():
+    logging.info('fetching latest lambda ami')
+    resp = requests.get('https://docs.aws.amazon.com/lambda/latest/dg/current-supported-versions.html')
+    assert resp.status_code == 200
+    ami = re.findall(r'(amzn-ami-hvm[^ ]+)"', resp.text)[0]
+    logging.info(ami)
+    return ami

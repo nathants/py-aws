@@ -12,6 +12,7 @@ setuptools.setup(
     install_requires=['boto3 >1, <2',
                       'pytz',
                       'tzlocal',
+                      'requests >2, <3',
                       'awscli >1, <2',
                       'pager >3, <4'],
     entry_points={'console_scripts': ['ec2 = aws.ec2:main',

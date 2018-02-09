@@ -1091,8 +1091,6 @@ bash /tmp/timeout_poweroff.sh &> /dev/null </dev/null &
 disown %1
 """
 
-# TODO switch to spot fleets for creating spot instances
-# TODO switch to TagSpecifications in create_instances() and create_spot_fleet() so we can set tags at creation time
 def new(name: 'name of the instance',
         *tags: 'tags to set as "<key>=<value>"',
         key: 'key pair name'                          = shell.conf.get_or_prompt_pref('key',  __file__, message='key pair name'),

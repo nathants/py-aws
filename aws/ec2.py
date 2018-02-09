@@ -976,6 +976,9 @@ def _create_spot_instances(**opts):
     logging.info("wait for spot request to be filled for fleet:\n%s", request_id)
     try:
         for _ in range(300):
+            state = _retry(_client().describe_spot_fleet_requests)(SpotFleetRequestIds=[request_id])['SpotFleetRequestConfigs'][0]['SpotFleetRequestState']
+            failed_states = ['cancelled', 'failed', 'cancelled_running', 'cancelled_terminating']
+            assert state not in failed_states, 'spot fleet failed with: %s' % state
             xs = _retry(_client().describe_spot_fleet_instances)(SpotFleetRequestId=request_id)['ActiveInstances']
             if len(xs) == opts['TargetCapacity']:
                 break

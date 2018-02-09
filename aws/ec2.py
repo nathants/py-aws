@@ -1025,7 +1025,6 @@ _default_init = 'date > /tmp/cloudinit.log'
 
 
 _st1_init = """
-set -e
 (
  echo g # Create a new empty GPT partition table
  echo n # Add a new partition
@@ -1059,6 +1058,39 @@ sudo chown -R ubuntu:ubuntu /mnt
 """
 
 
+_timeout_init = """
+echo '# timeout will call this script before it `sudo poweroff`s, and wait 60 seconds for this script to complete' >> /tmp/timeout.sh
+echo '
+    timeout={}
+    start=$(date +%s)
+    while true; do
+        now=$(date +%s)
+        duration=$(($now - $start))
+        (($duration > $timeout)) && break
+        remaining=$(($timeout - $duration))
+        echo seconds until poweroff: $remaining > /tmp/timeout_poweroff.log
+        sleep 1
+    done
+    echo run: bash /tmp/timeout.sh > /tmp/timeout_poweroff.log
+    bash /tmp/timeout.sh &
+    pid=$!
+    start=$(date +%s)
+    overtime=60
+    while true; do
+        ps $pid || break
+        now=$(date +%s)
+        duration=$(($now - $start))
+        (($duration > $overtime)) && break
+        remaining=$(($overtime - $duration))
+        echo seconds until poweroff: $remaining > /tmp/timeout_poweroff.log
+        sleep 1
+    done
+    sudo poweroff
+' > /tmp/timeout_poweroff.sh
+bash /tmp/timeout_poweroff.sh &> /dev/null </dev/null &
+disown %1
+"""
+
 # TODO switch to spot fleets for creating spot instances
 # TODO switch to TagSpecifications in create_instances() and create_spot_fleet() so we can set tags at creation time
 def new(name: 'name of the instance',
@@ -1074,7 +1106,7 @@ def new(name: 'name of the instance',
         zone: 'ec2 availability zone'                 = None,
         gigs: 'gb capacity of primary gp2 disk'       = 8,
         gigs_st1: 'gb capacity of secondary st1 disk' = 0,
-        init: 'cloud init command'                    = _default_init,
+        init: 'run some bash via cloud init'          = _default_init,
         data: 'arbitrary user-data'                   = None,
         cmd: 'ssh command'                            = None,
         num: 'number of instances'                    = 1,
@@ -1083,10 +1115,17 @@ def new(name: 'name of the instance',
         tty:   'run cmd in a tty'                     = False,
         no_wait: 'do not wait for ssh'                = False,
         login: 'login in to the instance'             = False,
-        seconds: ('how many seconds to wait for ssh '
-                  'before continuing with however '
-                  'many instances became available '
-                  'and terminating the rest')         = 0):
+        seconds_timeout: (
+            'will `sudo poweroff` after this many '
+            'seconds. calls `bash /tmp/timeout.sh` '
+            'if it exists and waits 60 seconds for '
+            'it to exit before calling `sudo poweroff`. '
+            'set to 0 to disable.')                   = 60 * 60,
+        seconds_wait: (
+            'how many seconds to wait for ssh '
+            'before continuing with however '
+            'many instances became available '
+            'and terminating the rest')               = 0):
     if spot:
         spot = float(spot)
     num = int(num)
@@ -1103,7 +1142,9 @@ def new(name: 'name of the instance',
         if gigs_st1 and init == _default_init:
             init = _st1_init
         elif type.startswith('i3.') and init == _default_init:
-            init = _nvme_init
+            init = _nvme_init + init
+        if seconds_timeout:
+            init += _timeout_init.format(seconds_timeout)
         assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
         init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash -e $path /var/log/cloud_init_script.log 2>&1' % util.strings.b64_encode(init)
     if ami in ubuntus:
@@ -1178,7 +1219,7 @@ def new(name: 'name of the instance',
             break
         else:
             try:
-                ready_ids = _wait_for_ssh(*instances, seconds=seconds)
+                ready_ids = _wait_for_ssh(*instances, seconds=seconds_wait)
                 break
             except KeyboardInterrupt:
                 try:

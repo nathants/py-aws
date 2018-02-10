@@ -556,7 +556,13 @@ def stop(*tags, yes=False, first_n=None, last_n=None, wait=False):
 def rm(*tags, yes=False, first_n=None, last_n=None):
     assert tags, 'you cannot rm all things, specify some tags'
     assert tags != ('*',), 'you cannot rm all things'
-    instances = _ls(tags, ['running', 'stopped', 'pending'], first_n, last_n)
+    pendings = _ls(tags, 'pending', first_n, last_n)
+    if pendings:
+        logging.info('wait for pending instances before rm:')
+        for pending in pendings:
+            logging.info(' %s', _pretty(pending))
+        _wait_for_state('running', *pendings)
+    instances = _ls(tags, ['running', 'stopped'], first_n, last_n)
     assert instances, 'didnt find any instances for those tags'
     logging.info('going to terminate the following instances:')
     for i in instances:
@@ -1224,14 +1230,12 @@ def new(name: 'name of the instance',
                 break
             except KeyboardInterrupt:
                 try:
-                    wait(*[i.instance_id for i in instances], yes=True)
                     rm(*[i.instance_id for i in instances], yes=True)
                 except AssertionError:
                     pass # when $seconds, and no instances where ready, everything has already been terminated, and rm fails an assert
                 raise
             except:
                 try:
-                    wait(*[i.instance_id for i in instances], yes=True)
                     rm(*[i.instance_id for i in instances], yes=True)
                 except AssertionError:
                     pass # when $seconds, and no instances where ready, everything has already been terminated, and rm fails an assert

@@ -527,6 +527,7 @@ def emacs(path, *tags, first_n=None, last_n=None):
     except:
         sys.exit(1)
 
+
 def mosh(*tags, first_n=None, last_n=None):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
@@ -604,7 +605,7 @@ def wait_for_ssh(*tags, yes=False, first_n=None, last_n=None):
     _wait_for_ssh(*instances)
 
 
-def _wait_for_ssh(*instances, seconds=0):
+def _wait_for_ssh(*instances, seconds=0, user='ubuntu'):
     logging.info('wait for ssh...')
     true_start = time.time()
     for _ in range(200):
@@ -612,7 +613,7 @@ def _wait_for_ssh(*instances, seconds=0):
         start = time.time()
         try:
             running_ids = ' '.join([i.instance_id for i in running])
-            res = shell.run('ec2 ssh', running_ids, '--batch-mode -t 10 -yc "whoami>/dev/null" 2>&1', warn=True)
+            res = shell.run('ec2 ssh', running_ids, '--user', user, '--batch-mode -t 10 -yc "whoami>/dev/null" 2>&1', warn=True)
             ready_ids = [x.split()[-1]
                          for x in res['stdout'].splitlines()
                          if x.startswith('success: ')]
@@ -953,13 +954,14 @@ def _subnet(vpc, zone):
     return subnets[0].id
 
 
-def _blocks(gigs, gigs_st1=None):
-    blocks = [{'DeviceName': '/dev/sda1',
+def _blocks(gigs, gigs_st1=None, naming='sda'):
+    assert naming in ['sda', 'xvda'] # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/device_naming.html
+    blocks = [{'DeviceName': ('/dev/sda1' if naming == 'sda' else '/dev/xvda'),
                'Ebs': {'VolumeSize': int(gigs),
                        'VolumeType': 'gp2',
                        'DeleteOnTermination': True}}]
     if gigs_st1:
-        blocks.append({'DeviceName': '/dev/sda2',
+        blocks.append({'DeviceName': ('/dev/sda2' if naming == 'sda' else '/dev/xvdb'),
                        'Ebs': {'VolumeSize': int(gigs_st1),
                                'VolumeType': 'st1',
                                'DeleteOnTermination': True}})
@@ -1022,7 +1024,8 @@ def _make_spot_opts(spot, opts, fleet_role):
     spot_opts['TargetCapacity'] = opts['MaxCount']
     opts['SecurityGroups'] = [{'GroupId': x} for x in opts['SecurityGroupIds']]
     opts = util.dicts.drop(opts, ['MaxCount', 'MinCount', 'SecurityGroupIds'])
-    opts['UserData'] = util.strings.b64_encode(opts['UserData'])
+    if 'UserData' in opts:
+        opts['UserData'] = util.strings.b64_encode(opts['UserData'])
     spot_opts['LaunchSpecifications'] = [opts]
     return spot_opts
 
@@ -1120,6 +1123,11 @@ def new(name: 'name of the instance',
         tty:   'run cmd in a tty'                     = False,
         no_wait: 'do not wait for ssh'                = False,
         login: 'login in to the instance'             = False,
+        disable_userdata: (
+            'completely disable user-data, which is '
+            'used via cloud-init to power timeout-seconds '
+            'and format drives for i3 and st1, among '
+            'other things.')                          = False,
         spot: (
             'spot bid as percentage of the '
             'on-demand price for current type. '
@@ -1142,8 +1150,9 @@ def new(name: 'name of the instance',
             'and terminating the rest')               = 0):
     if spot:
         spot_percentage = spot
-        spot = float(spot) * list(prices(type))[0]
-        logging.info('bidding spot at x%s of current on-demand price %s', spot_percentage, spot)
+        ondemand_price = list(prices(type))[0]
+        spot = float(spot) * ondemand_price
+        logging.info('bidding spot at: (spot * on-demand) %s * %s = %s', spot_percentage, ondemand_price, spot)
     num = int(num)
     assert not (spot and type == 't2.nano'), 'no spot pricing for t2.nano'
     if vpc.lower() == 'none':
@@ -1155,16 +1164,18 @@ def new(name: 'name of the instance',
     if data: # you can have either data or init, not both
         init = '#raw-data\n' + data
     else:
-        if gigs_st1 and init == _default_init:
-            init = _st1_init
-        elif type.startswith('i3.') and init == _default_init:
-            init = _nvme_init + init
         if seconds_timeout:
-            init += _timeout_init.format(seconds_timeout)
+            logging.info('this instance will `sudo poweroff` after %s seconds because of --seconds-timeout', seconds_timeout)
+            init = _timeout_init.format(seconds_timeout) + init
+        if gigs_st1:
+            init = _st1_init + init
+        if type.startswith('i3.'):
+            init = _nvme_init + init
         assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
         init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash -e $path /var/log/cloud_init_script.log 2>&1' % util.strings.b64_encode(init)
+    _ami = ami
     if ami == 'lambda':
-        ami = _lambda_ami()
+        ami = lambda_ami()
     elif ami in ubuntus:
         logging.info('fetch latest ami for: %s', ami)
         distro = ami
@@ -1178,15 +1189,17 @@ def new(name: 'name of the instance',
         ami_name = ami
         ami = amis(ami, id_only=True, most_recent=True)[0]
         logging.info('using most recent ami for name: %s %s', ami_name, ami)
+    user = 'ec2-user' if _ami in ['lambda'] else 'ubuntu' # amzn linux needs diff ssh user, and diff root volume naming
     opts = {}
-    opts['UserData'] = init
+    if not disable_userdata:
+        opts['UserData'] = init
     opts['ImageId'] = ami
     opts['MinCount'] = num
     opts['MaxCount'] = num
     opts['KeyName'] = key
     opts['SecurityGroupIds'] = [x.id for x in _sgs(names=[sg])]
     opts['InstanceType'] = type
-    opts['BlockDeviceMappings'] = _blocks(gigs, gigs_st1)
+    opts['BlockDeviceMappings'] = _blocks(gigs, gigs_st1, 'xvda' if user == 'ec2-user' else 'sda')
     opts['TagSpecifications'] = [{'ResourceType': 'instance',
                                   'Tags': [{'Key': 'Name', 'Value': name},
                                            {'Key': 'owner', 'Value': owner},
@@ -1220,7 +1233,7 @@ def new(name: 'name of the instance',
         if spot:
             spot_opts = _make_spot_opts(spot, opts, fleet_role)
             _spot_opts = copy.deepcopy(spot_opts)
-            _spot_opts['LaunchSpecifications'][0].pop('UserData')
+            _spot_opts['LaunchSpecifications'][0].pop('UserData', None)
             logging.info('request spot instances:\n' + pprint.pformat(_spot_opts))
             # TODO improve the wait-for-spot-fullfillment logic inside _create_spot_instances()
             # TODO currently this can error, which is not so good. compared to _resource().create_instances().
@@ -1236,10 +1249,10 @@ def new(name: 'name of the instance',
             instances = _resource().create_instances(**opts)
         logging.info('instances:\n%s', '\n'.join([i.instance_id for i in instances]))
         if no_wait:
-            break
+            return [i.instance_id for i in instances]
         else:
             try:
-                ready_ids = _wait_for_ssh(*instances, seconds=seconds_wait)
+                ready_ids = _wait_for_ssh(*instances, seconds=seconds_wait, user=user)
                 break
             except KeyboardInterrupt:
                 try:
@@ -1258,14 +1271,14 @@ def new(name: 'name of the instance',
     ready_instances = _ls(ready_ids, state='running')
     if login:
         logging.info('logging in...')
-        ssh(ready_instances[0].instance_id, yes=True, quiet=True)
+        ssh(ready_instances[0].instance_id, yes=True, quiet=True, user=user)
     elif cmd:
         if os.path.exists(cmd):
             logging.info('reading cmd from: %s', os.path.abspath(cmd))
             with open(cmd) as f:
                 cmd = f.read()
         logging.info('running cmd...')
-        ssh(*[i.instance_id for i in ready_instances], yes=True, cmd=cmd, no_tty=not tty)
+        ssh(*[i.instance_id for i in ready_instances], yes=True, cmd=cmd, no_tty=not tty, user=user)
     logging.info('done')
     return [i.instance_id for i in ready_instances]
 
@@ -1789,7 +1802,7 @@ def pmap(instance_ids: 'comma separated ec2 instance ids to run cmds on',
     return [results[arg_num] for arg_num, _ in enumerate(args)]
 
 
-def _lambda_ami():
+def lambda_ami():
     logging.info('fetching latest lambda ami')
     resp = requests.get('https://docs.aws.amazon.com/lambda/latest/dg/current-supported-versions.html')
     assert resp.status_code == 200

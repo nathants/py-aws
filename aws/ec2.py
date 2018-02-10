@@ -1,3 +1,4 @@
+import copy
 import boto3
 import requests
 import hashlib
@@ -1115,11 +1116,19 @@ def new(name: 'name of the instance',
         data: 'arbitrary user-data'                   = None,
         cmd: 'ssh command'                            = None,
         num: 'number of instances'                    = 1,
-        spot:  'spot price to bid'                    = 1.0,
         spot_days: 'num days for spot price check'    = 2,
         tty:   'run cmd in a tty'                     = False,
         no_wait: 'do not wait for ssh'                = False,
         login: 'login in to the instance'             = False,
+        spot: (
+            'spot bid as percentage of the '
+            'on-demand price for current type. '
+            'check prices with `ec2 prices -h`. '
+            'a value of 1.0, the default, bids '
+            'at the on-demand price, so only get '
+            'terminated if spot market rises above '
+            'on-demand market. set to 0 use '
+            'on-demand instead of spot.')             = 1.0,
         seconds_timeout: (
             'will `sudo poweroff` after this many '
             'seconds. calls `bash /tmp/timeout.sh` '
@@ -1132,9 +1141,11 @@ def new(name: 'name of the instance',
             'many instances became available '
             'and terminating the rest')               = 0):
     if spot:
-        spot = float(spot)
+        spot_percentage = spot
+        spot = float(spot) * list(prices(type))[0]
+        logging.info('bidding spot at x%s of current on-demand price %s', spot_percentage, spot)
     num = int(num)
-    assert not (spot and type.startswith('t2.')), 't2.* instances cant use spot pricing'
+    assert not (spot and type == 't2.nano'), 'no spot pricing for t2.nano'
     if vpc.lower() == 'none':
         vpc = None
     assert not login or num == 1, util.colors.red('you asked to login, but you are starting more than one instance, so its not gonna happen')
@@ -1208,7 +1219,9 @@ def new(name: 'name of the instance',
             logging.info('using ec2-classic')
         if spot:
             spot_opts = _make_spot_opts(spot, opts, fleet_role)
-            logging.info('request spot instances:\n' + pprint.pformat(util.dicts.drop_in(spot_opts, ['LaunchSpecification', 'UserData'])))
+            _spot_opts = copy.deepcopy(spot_opts)
+            _spot_opts['LaunchSpecifications'][0].pop('UserData')
+            logging.info('request spot instances:\n' + pprint.pformat(_spot_opts))
             # TODO improve the wait-for-spot-fullfillment logic inside _create_spot_instances()
             # TODO currently this can error, which is not so good. compared to _resource().create_instances().
             try:
@@ -1392,7 +1405,7 @@ def max_spot_price(type, kind: 'classic|vpc' = 'classic', days=7):
 
 def cheapest_zone(type, kind: 'classic | vpc' = 'classic', days=7):
     zone, price = max_spot_price(type, kind, days)[0].split()
-    logging.info('cheapest price: %s', price)
+    logging.info('cheapest spot price: %s for zone %s', price, zone)
     return [zone, price]
 
 
@@ -1771,10 +1784,86 @@ def pmap(instance_ids: 'comma separated ec2 instance ids to run cmds on',
                     logging.info('retrying: arg_num: %s, instance: %s, retried: %s, session: %s', arg_num, instance.instance_id, retried[arg_num], session)
                     numbered_args.append((arg_num, arg))
                     time.sleep(retry_sleep)
-
         list(pool.thread.map(check, list(active.items())))
     assert len(results) == len(args), 'mismatch result sizes'
     return [results[arg_num] for arg_num, _ in enumerate(args)]
+
+
+def _lambda_ami():
+    logging.info('fetching latest lambda ami')
+    resp = requests.get('https://docs.aws.amazon.com/lambda/latest/dg/current-supported-versions.html')
+    assert resp.status_code == 200
+    ami = re.findall(r'(amzn-ami-hvm[^ ]+)"', resp.text)[0]
+    amis = list(_resource().images.filter(Filters=[{'Name': 'name', 'Values': [ami]}]))
+    assert len(amis) == 1
+    ami_id = amis[0].image_id
+    logging.info('%s %s', ami_id, ami)
+    return ami_id
+
+
+_region_names = {
+    "us-east-2": "US East (Ohio)",
+    "us-east-1": "US East (N. Virginia)",
+    "us-west-1": "US West (N. California)",
+    "us-west-2": "US West (Oregon)",
+    "ap-south-1": "Asia Pacific (Mumbai)",
+    "ap-northeast-2": "Asia Pacific (Seoul)",
+    "ap-southeast-1": "Asia Pacific (Singapore)",
+    "ap-southeast-2": "Asia Pacific (Sydney)",
+    "ap-northeast-1": "Asia Pacific (Tokyo)",
+    "ca-central-1": "Canada (Central)",
+    "cn-north-1": "China (Beijing)",
+    "eu-central-1": "EU (Frankfurt)",
+    "eu-west-1": "EU (Ireland)",
+    "eu-west-2": "EU (London)",
+    "eu-west-3": "EU (Paris)",
+    "sa-east-1": "South America (São Paulo)",
+}
+
+
+def _current_region():
+    _client() # run session setup logic
+    return boto3.DEFAULT_SESSION.region_name
+
+
+# TODO this can probably be cached for some time period
+def prices(instance_type=None):
+    region = _current_region()
+    with _region('us-east-1'): # api only exists in us-east-1
+        filters = [
+            {"Type": "TERM_MATCH",
+             "Field": "location",
+             "Value": _region_names[region]},
+            {"Type": "TERM_MATCH",
+             "Field": "operatingSystem",
+             "Value": "Linux"},
+            {"Type": "TERM_MATCH",
+             "Field": "tenancy",
+             "Value": "Shared"}
+        ]
+        if instance_type:
+            filters.append(
+                {"Type": "TERM_MATCH",
+                 "Field": "instanceType",
+                 "Value": instance_type}
+            )
+        xs = boto3.client('pricing').get_products(ServiceCode='AmazonEC2', Filters=filters)['PriceList']
+        res = []
+        for x in xs:
+            x = json.loads(x)
+            name = x['product']['attributes']['instanceType']
+            price = x['terms']['OnDemand']
+            price = list(price.values())[0]
+            price = list(price['priceDimensions'].values())[0]
+            price = price['pricePerUnit']['USD']
+            price = float(price)
+            res.append([name, price])
+        res = sorted(res, key=lambda x: x[1])
+        for name, price in res:
+            if instance_type:
+                yield price
+            else:
+                yield '{name} {price}'.format(**locals())
 
 
 def main():
@@ -1791,12 +1880,3 @@ def main():
             if e.args:
                 logging.info(util.colors.red(e.args[0]))
             sys.exit(1)
-
-
-def _lambda_ami():
-    logging.info('fetching latest lambda ami')
-    resp = requests.get('https://docs.aws.amazon.com/lambda/latest/dg/current-supported-versions.html')
-    assert resp.status_code == 200
-    ami = re.findall(r'(amzn-ami-hvm[^ ]+)"', resp.text)[0]
-    logging.info(ami)
-    return ami

@@ -1881,7 +1881,7 @@ def prices(instance_type=None):
                 yield '{name} {price}'.format(**locals())
 
 
-def new_vpc(name, *tags, xx=0):
+def new_vpc(name, *tags, xx=0, description=None):
     """
     setup a default-like vpc, with cidr 10.xx.0.0/16 and a
     subnet for each zone like 10.xx.yy.0/20. add a security
@@ -1912,7 +1912,7 @@ def new_vpc(name, *tags, xx=0):
         _retry(_client().create_tags)(Resources=[subnet.id], Tags=tags)
         _retry(_client().modify_subnet_attribute)(SubnetId=subnet.id, MapPublicIpOnLaunch={'Value': True})
         _retry(_client().associate_route_table)(RouteTableId=main_route_table.route_table_id, SubnetId=subnet.id)
-    sg = _resource().create_security_group(GroupName=name, Description=name, VpcId=vpc.id)
+    sg = _resource().create_security_group(GroupName=name, Description=description or name, VpcId=vpc.id)
     _retry(sg.create_tags)(Tags=tags)
 
 

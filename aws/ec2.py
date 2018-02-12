@@ -259,12 +259,6 @@ def ls(*tags, state='all', first_n=None, last_n=None, all_tags=False):
 def _remote_cmd(cmd, stdin, instance_id):
     return 'fail_msg="failed to run cmd on instance: %s"; mkdir -p ~/.cmds || echo $fail_msg; path=~/.cmds/$(uuidgen); input=$path.input; echo %s | base64 -d > $path || echo $fail_msg; echo %s | base64 -d > $input || echo $fail_msg; cat $input | bash $path; code=$?; if [ $code != 0 ]; then echo $fail_msg; exit $code; fi' % (instance_id, util.strings.b64_encode(cmd), util.strings.b64_encode(stdin)) # noqa
 
-class _instance:
-    def __init__(self, ip):
-        self.instance_id = ip
-        self.public_dns_name = ip
-        self.private_ip_address = ip
-        self.tags = [{'Key': 'Name', 'Value': ip}]
 
 def ssh(
         *tags,
@@ -279,7 +273,6 @@ def ssh(
         max_threads: 'max ssh connections' = 20,
         timeout: 'seconds before ssh cmd considered failed' = None,
         no_tty: 'when backgrounding a process, you dont want a tty' = False,
-        user: 'specify ssh user' = 'ubuntu',
         key: 'speficy ssh key' = None,
         echo: 'echo some info about what was run on which hosts' = False,
         batch_mode: 'operate like there are many instances, even if only one' = False,
@@ -291,8 +284,6 @@ def ssh(
     assert tags, 'you must specify some tags'
     if hasattr(tags[0], 'instance_id'):
         instances = tags
-    elif tags[0].endswith('.com') or tags[0].count('.') == 3 and tags[0].replace('.', '').isdigit() and not tags[0].startswith('10.'):
-        instances = [_instance(tag) for tag in tags]
     else:
         instances = _ls(tags, 'running', first_n, last_n)
     assert instances, 'didnt find any instances'
@@ -308,21 +299,16 @@ def ssh(
             cmd = '\n'.join(lines)
         else:
             cmd = 'set -e\n' + cmd
-    if not isinstance(instances[0], _instance):
-        assert (cmd and instances) or len(instances) == 1, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    assert (cmd and instances) or len(instances) == 1, 'must specify --cmd to target multiple instances'
     if not (quiet and yes):
-        if not isinstance(instances[0], _instance):
-            for i in instances:
-                logging.info(_pretty(i))
-        else:
-            for i in instances:
-                logging.info(i.instance_id)
+        for i in instances:
+            logging.info(_pretty(i))
     ssh_cmd = ('ssh -A' + (' -i {} '.format(key) if key else '') + (' -tt ' if not no_tty or not cmd else ' -T ') + ssh_args).split()
     if echo:
         logging.info('ec2.ssh running against tags: %s, with cmd: %s', tags, cmd)
     if timeout:
         ssh_cmd = ['timeout', '{}s'.format(timeout)] + ssh_cmd
-    make_ssh_cmd = lambda instance: ssh_cmd + [user + '@' + instance.public_dns_name, _remote_cmd(cmd, stdin, instance.instance_id)]
+    make_ssh_cmd = lambda instance: ssh_cmd + [_ssh_user(instance) + '@' + instance.public_dns_name, _remote_cmd(cmd, stdin, instance.instance_id)]
     if is_cli and not yes and not (len(instances) == 1 and not cmd):
         logging.info('\nwould you like to proceed? y/n\n')
         assert pager.getch() == 'y', 'abort'
@@ -377,7 +363,7 @@ def ssh(
                              raw_cmd=True,
                              callback=_make_callback(instances[0], quiet, None, no_stream) if prefixed else None)
         else:
-            subprocess.check_call(ssh_cmd + [user + '@' + instances[0].public_dns_name])
+            subprocess.check_call(ssh_cmd + [_ssh_user(instances[0]) + '@' + instances[0].public_dns_name])
     except:
         raise
 
@@ -393,11 +379,12 @@ def _make_callback(instance, quiet, append=None, no_stream=False):
     return f
 
 
-def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None, user='ubuntu'):
+def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None):
     assert tags, 'you must specify some tags'
     assert ':' in src + dst, 'you didnt specify a remote path, which starts with ":"'
     instances = _ls(tags, 'running', first_n=first_n, last_n=last_n)
     assert instances, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    user = _ssh_user(*instances)
     logging.info('targeting:')
     for instance in instances:
         logging.info(' %s', _pretty(instance))
@@ -435,10 +422,11 @@ def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None, us
 
 # TODO when one instance only, dont colorize
 # TODO stop using bash -s
-def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_threads=0, user='ubuntu'):
+def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_threads=0):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert instances, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    user = _ssh_user(*instances)
     logging.info('targeting:')
     for instance in instances:
         logging.info(' %s', _pretty(instance))
@@ -477,10 +465,11 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_t
 
 
 # TODO stop using bash -s
-def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, user='ubuntu'):
+def pull(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False):
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly one instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
+    user = _ssh_user(*instances)
     instance = instances[0]
     logging.info('targeting:\n %s', _pretty(instance))
     host = instance.public_dns_name
@@ -605,15 +594,25 @@ def wait_for_ssh(*tags, yes=False, first_n=None, last_n=None):
     _wait_for_ssh(*instances)
 
 
-def _wait_for_ssh(*instances, seconds=0, user='ubuntu'):
+def _ssh_user(*instances):
+    try:
+        users = {_tags(i)['ssh-user'] for i in instances}
+    except KeyError:
+        assert False, 'instances should have a tag "ssh-user=<username>"'
+    assert len(users), 'no ssh-user tag found: %s' % '\n '.join(_pretty(i for i in instances))
+    assert len(users) == 1, 'cannot operate on instances with heteragenous ssh-users: %s' % users
+    return users.pop()
+
+
+def _wait_for_ssh(*instances, seconds=0):
     logging.info('wait for ssh...')
     true_start = time.time()
     for _ in range(200):
-        running = _ls([i.id for i in instances], state='running')
+        running = _ls([i.instance_id for i in instances], state='running')
         start = time.time()
         try:
             running_ids = ' '.join([i.instance_id for i in running])
-            res = shell.run('ec2 ssh', running_ids, '--user', user, '--batch-mode -t 10 -yc "whoami>/dev/null" 2>&1', warn=True)
+            res = shell.run('ec2 ssh', running_ids,  '--batch-mode -t 10 -yc "whoami>/dev/null" 2>&1', warn=True)
             ready_ids = [x.split()[-1]
                          for x in res['stdout'].splitlines()
                          if x.startswith('success: ')]
@@ -637,6 +636,7 @@ def _wait_for_ssh(*instances, seconds=0, user='ubuntu'):
             raise
         time.sleep(max(0, 5 - (time.time() - start)))
     assert False, 'failed to wait for ssh'
+
 
 
 def untag(ls_tags, unset_tags, yes=False, first_n=None, last_n=None):
@@ -1122,6 +1122,11 @@ def new(name: 'name of the instance',
         tty:   'run cmd in a tty'                     = False,
         no_wait: 'do not wait for ssh'                = False,
         login: 'login in to the instance'             = False,
+        ssh_user: (
+            'what ssh user to use for this instance. '
+            'this is ami specific, if not provided '
+            'will try to guess based on ami choice, '
+            'finally defaulting to "ubuntu".')        = None,
         verbatim_init: (
             'use this string verbatim as the '
             'cloud-init user data.')                  = None,
@@ -1186,7 +1191,10 @@ def new(name: 'name of the instance',
         ami_name = ami
         ami = amis(ami, id_only=True, most_recent=True)[0]
         logging.info('using most recent ami for name: %s %s', ami_name, ami)
-    user = 'ec2-user' if _ami in ['lambda'] else 'ubuntu' # amzn linux needs diff ssh user, and diff root volume naming
+    if ssh_user:
+        user = ssh_user
+    else:
+        user = 'ec2-user' if _ami in ['lambda'] else 'ubuntu' # amzn linux needs diff ssh user, and diff root volume naming
     opts = {}
     opts['UserData'] = init
     opts['ImageId'] = ami
@@ -1199,6 +1207,7 @@ def new(name: 'name of the instance',
     opts['TagSpecifications'] = [{'ResourceType': 'instance',
                                   'Tags': [{'Key': 'Name', 'Value': name},
                                            {'Key': 'owner', 'Value': owner},
+                                           {'Key': 'ssh-user', 'Value': user},
                                            {'Key': 'creation-date', 'Value': _now()},
                                            {'Key': 'num', 'Value': str(num)}] + [{'Key': k, 'Value': v}
                                                                                  for tag in tags
@@ -1248,7 +1257,7 @@ def new(name: 'name of the instance',
             return [i.instance_id for i in instances]
         else:
             try:
-                ready_ids = _wait_for_ssh(*instances, seconds=seconds_wait, user=user)
+                ready_ids = _wait_for_ssh(*instances, seconds=seconds_wait)
                 break
             except KeyboardInterrupt:
                 try:
@@ -1267,14 +1276,14 @@ def new(name: 'name of the instance',
     ready_instances = _ls(ready_ids, state='running')
     if login:
         logging.info('logging in...')
-        ssh(ready_instances[0].instance_id, yes=True, quiet=True, user=user)
+        ssh(ready_instances[0].instance_id, yes=True, quiet=True)
     elif cmd:
         if os.path.exists(cmd):
             logging.info('reading cmd from: %s', os.path.abspath(cmd))
             with open(cmd) as f:
                 cmd = f.read()
         logging.info('running cmd...')
-        ssh(*[i.instance_id for i in ready_instances], yes=True, cmd=cmd, no_tty=not tty, user=user)
+        ssh(*[i.instance_id for i in ready_instances], yes=True, cmd=cmd, no_tty=not tty)
     logging.info('done')
     return [i.instance_id for i in ready_instances]
 
@@ -1734,10 +1743,7 @@ def pmap(instance_ids: 'comma separated ec2 instance ids to run cmds on',
          retry_sleep: 'seconds to sleep before retrying' = 30):
     args = args.split(',')
     instance_ids = instance_ids.split(',')
-    if instance_ids[0].endswith('.com') or instance_ids[0].count('.') == 3 and instance_ids[0].replace('.', '').isdigit():
-        instances = [_instance(tag) for tag in instance_ids]
-    else:
-        instances = list(_ls(instance_ids, state='running'))
+    instances = list(_ls(instance_ids, state='running'))
     assert len(instances) == len(instance_ids)
     nums = {instance: i for i, instance in enumerate(instances)}
     active = {}

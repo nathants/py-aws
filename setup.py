@@ -20,8 +20,7 @@ setuptools.setup(
                                       's3-stubbed = aws.s3_stubbed:main',
                                       'elb = aws.elb:main',
                                       'emr = aws.emr:main',
-                                      'ddb = aws.ddb:main',
-                                      'launch = aws.launch:main']},
+                                      'ddb = aws.ddb:main']},
     scripts = ['bin/stub_s3.sh'],
     description='aws',
 )

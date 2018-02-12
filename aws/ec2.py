@@ -1116,18 +1116,15 @@ def new(name: 'name of the instance',
         gigs: 'gb capacity of primary gp2 disk'       = 8,
         gigs_st1: 'gb capacity of secondary st1 disk' = 0,
         init: 'run some bash via cloud init'          = _default_init,
-        data: 'arbitrary user-data'                   = None,
         cmd: 'ssh command'                            = None,
         num: 'number of instances'                    = 1,
         spot_days: 'num days for spot price check'    = 2,
         tty:   'run cmd in a tty'                     = False,
         no_wait: 'do not wait for ssh'                = False,
         login: 'login in to the instance'             = False,
-        disable_userdata: (
-            'completely disable user-data, which is '
-            'used via cloud-init to power timeout-seconds '
-            'and format drives for i3 and st1, among '
-            'other things.')                          = False,
+        verbatim_init: (
+            'use this string verbatim as the '
+            'cloud-init user data.')                  = None,
         spot: (
             'spot bid as percentage of the '
             'on-demand price for current type. '
@@ -1161,8 +1158,8 @@ def new(name: 'name of the instance',
     owner = shell.run('whoami')
     for tag in tags:
         assert '=' in tag, 'bad tag, should be key=value, not: %s' % tag
-    if data: # you can have either data or init, not both
-        init = '#raw-data\n' + data
+    if verbatim_init:
+        init = verbatim_init
     else:
         if seconds_timeout:
             logging.info('this instance will `sudo poweroff` after %s seconds because of --seconds-timeout', seconds_timeout)
@@ -1191,8 +1188,7 @@ def new(name: 'name of the instance',
         logging.info('using most recent ami for name: %s %s', ami_name, ami)
     user = 'ec2-user' if _ami in ['lambda'] else 'ubuntu' # amzn linux needs diff ssh user, and diff root volume naming
     opts = {}
-    if not disable_userdata:
-        opts['UserData'] = init
+    opts['UserData'] = init
     opts['ImageId'] = ami
     opts['MinCount'] = num
     opts['MaxCount'] = num

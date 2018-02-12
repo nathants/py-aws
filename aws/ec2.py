@@ -1881,6 +1881,41 @@ def prices(instance_type=None):
                 yield '{name} {price}'.format(**locals())
 
 
+def new_vpc(name, *tags, xx=0):
+    """
+    setup a default-like vpc, with cidr 10.xx.0.0/16 and a
+    subnet for each zone like 10.xx.yy.0/20. add a security
+    group with the same name. public ipv4 is turned on.
+    """
+    cidr = '10.xx.0.0/16'
+    for tag in tags:
+        assert '=' in tag, 'bad tag, should be key=value, not: %s' % tag
+    tags = [{"Key": "Name", "Value": name}] + [{'Key': k, 'Value': v}
+                                               for tag in tags
+                                               for k, v in [tag.split('=')]]
+    cidr = cidr.replace('xx', str(xx))
+    logging.info('cidr: %s', cidr)
+    vpc = _resource().create_vpc(CidrBlock=cidr)
+    _retry(vpc.create_tags)(Tags=tags)
+    vpc.wait_until_available()
+    _retry(vpc.modify_attribute)(EnableDnsHostnames={'Value': True})
+    ig = _resource().create_internet_gateway()
+    _retry(ig.create_tags)(Tags=tags)
+    _retry(vpc.attach_internet_gateway)(InternetGatewayId=ig.id)
+    main_route_table = list(vpc.route_tables.all())[0]
+    main_route_table.create_route(DestinationCidrBlock='0.0.0.0/0', GatewayId=ig.id)
+    _retry(main_route_table.create_tags)(Tags=tags)
+    for i, zone in enumerate(zones()):
+        block = '.'.join(cidr.split('/')[0].split('.')[:2] + [str(16 * i + 1), '0/20'])
+        logging.info('zone: %s block: %s', zone, block)
+        subnet = _resource().create_subnet(CidrBlock=block, VpcId=vpc.id, AvailabilityZone=zone)
+        _retry(_client().create_tags)(Resources=[subnet.id], Tags=tags)
+        _retry(_client().modify_subnet_attribute)(SubnetId=subnet.id, MapPublicIpOnLaunch={'Value': True})
+        _retry(_client().associate_route_table)(RouteTableId=main_route_table.route_table_id, SubnetId=subnet.id)
+    sg = _resource().create_security_group(GroupName=name, Description=name, VpcId=vpc.id)
+    _retry(sg.create_tags)(Tags=tags)
+
+
 def main():
     globals()['is_cli'] = True
     shell.ignore_closed_pipes()

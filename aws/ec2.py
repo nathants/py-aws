@@ -940,7 +940,15 @@ def keys():
 
 def vpcs():
     for vpc in _resource().vpcs.all():
-        logging.info('%s subnets: %s', _name(vpc), ' '.join([x.id for x in vpc.subnets.all()]))
+        logging.info('%s %s %s %s',
+                     _name(vpc),
+                     vpc.id,
+                     vpc.cidr_block,
+                     '\n ' + '\n '.join(sorted([' '.join([x.availability_zone,
+                                                          x.cidr_block,
+                                                          x.id])
+                                                for x in vpc.subnets.all()])))
+        logging.info('')
 
 
 def _subnet(vpc, zone):

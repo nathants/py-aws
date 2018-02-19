@@ -303,7 +303,7 @@ def ssh(
     if not (quiet and yes):
         for i in instances:
             logging.info(_pretty(i))
-    ssh_cmd = ('ssh -A' + (' -i {} '.format(key) if key else '') + (' -tt ' if not no_tty or not cmd else ' -T ') + ssh_args).split()
+    ssh_cmd = ('ssh' + (' -i {} '.format(key) if key else '') + (' -tt ' if not no_tty or not cmd else ' -T ') + ssh_args).split()
     if echo:
         logging.info('ec2.ssh running against tags: %s, with cmd: %s', tags, cmd)
     if timeout:
@@ -1450,7 +1450,7 @@ def start(*tags, yes=False, first_n=None, last_n=None, login=False, wait=False):
         assert len(instances) == 1, util.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         instances[0].wait_until_running()
         try:
-            shell.check_call('ssh -A' + ssh_args + 'ubuntu@%s' % _wait_for_ssh(*instances)[0], echo=True)
+            shell.check_call('ssh' + ssh_args + 'ubuntu@%s' % _wait_for_ssh(*instances)[0], echo=True)
         except:
             sys.exit(1)
     elif wait:

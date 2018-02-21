@@ -511,8 +511,9 @@ def emacs(path, *tags, first_n=None, last_n=None):
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     logging.info(_pretty(instances[0]))
+    i = instances[0]
     try:
-        shell.check_call("nohup emacsclient /ubuntu@{}:{} > /dev/null &".format(instances[0].public_dns_name, path))
+        shell.check_call("nohup emacsclient /{}@{}:{} > /dev/null &".format(_ssh_user(i), i.public_dns_name, path))
     except:
         sys.exit(1)
 
@@ -522,8 +523,9 @@ def mosh(*tags, first_n=None, last_n=None):
     instances = _ls(tags, 'running', first_n, last_n)
     assert len(instances) == 1, 'didnt find exactly 1 instance:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
     logging.info(_pretty(instances[0]))
+    i = instances[0]
     try:
-        shell.check_call('mosh ubuntu@%s' % instances[0].public_dns_name)
+        shell.check_call('mosh %s@%s' % (_ssh_user(i), i.public_dns_name))
     except:
         sys.exit(1)
 
@@ -1056,7 +1058,7 @@ sleep 2
 yes|sudo mkfs -t ext4 /dev/xvdb
 sudo mkdir -p /mnt
 sudo mount -a
-sudo chown -R ubuntu:ubuntu /mnt
+sudo chown -R $(whoami):$(whoami) /mnt
 """
 
 
@@ -1073,7 +1075,7 @@ sleep 2
 sudo mkfs -t ext4 /dev/nvme0n1p1
 sudo mkdir -p /mnt
 sudo mount -o discard /dev/nvme0n1p1 /mnt
-sudo chown -R ubuntu:ubuntu /mnt
+sudo chown -R $(whoami):$(whoami) /mnt
 """
 
 
@@ -1152,7 +1154,7 @@ def new(name: 'name of the instance',
             'seconds. calls `bash /tmp/timeout.sh` '
             'if it exists and waits 60 seconds for '
             'it to exit before calling `sudo poweroff`. '
-            'set to 0 to disable.')                   = 60 * 60,
+            'set to 0 to disable.')                   = shell.conf.get_optional_pref('seconds-timeout', __file__, 0),
         seconds_wait: (
             'how many seconds to wait for ssh '
             'before continuing with however '
@@ -1171,6 +1173,10 @@ def new(name: 'name of the instance',
     owner = shell.run('whoami')
     for tag in tags:
         assert '=' in tag, 'bad tag, should be key=value, not: %s' % tag
+    if ssh_user:
+        user = ssh_user
+    else:
+        user = 'ec2-user' if ami in ['lambda'] else 'ubuntu' # amzn linux needs diff ssh user, and diff root volume naming
     if verbatim_init:
         init = verbatim_init
     else:
@@ -1182,8 +1188,7 @@ def new(name: 'name of the instance',
         if type.startswith('i3.'):
             init = _nvme_init + init
         assert not init.startswith('#!'), 'init commands are bash snippets, and should not include a hashbang'
-        init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u ubuntu bash -e $path /var/log/cloud_init_script.log 2>&1' % util.strings.b64_encode(init)
-    _ami = ami
+        init = '#!/bin/bash\npath=/tmp/$(uuidgen); echo %s | base64 -d > $path; sudo -u %s bash -e $path /var/log/cloud_init_script.log 2>&1' % (util.strings.b64_encode(init), user)
     if ami == 'lambda':
         ami = lambda_ami()
     elif ami in ubuntus:
@@ -1199,10 +1204,6 @@ def new(name: 'name of the instance',
         ami_name = ami
         ami = amis(ami, id_only=True, most_recent=True)[0]
         logging.info('using most recent ami for name: %s %s', ami_name, ami)
-    if ssh_user:
-        user = ssh_user
-    else:
-        user = 'ec2-user' if _ami in ['lambda'] else 'ubuntu' # amzn linux needs diff ssh user, and diff root volume naming
     opts = {}
     opts['UserData'] = init
     opts['ImageId'] = ami
@@ -1450,7 +1451,7 @@ def start(*tags, yes=False, first_n=None, last_n=None, login=False, wait=False):
         assert len(instances) == 1, util.colors.red('you asked to ssh, but you started more than one instance, so its not gonna happen')
         instances[0].wait_until_running()
         try:
-            shell.check_call('ssh' + ssh_args + 'ubuntu@%s' % _wait_for_ssh(*instances)[0], echo=True)
+            shell.check_call('ssh' + ssh_args + '%s@%s' % (_ssh_user(instances[0]), _wait_for_ssh(*instances)[0]), echo=True)
         except:
             sys.exit(1)
     elif wait:
@@ -1922,6 +1923,17 @@ def new_vpc(name, *tags, xx=0, description=None):
         _retry(_client().associate_route_table)(RouteTableId=main_route_table.route_table_id, SubnetId=subnet.id)
     sg = _resource().create_security_group(GroupName=name, Description=description or name, VpcId=vpc.id)
     _retry(sg.create_tags)(Tags=tags)
+
+
+def conf():
+    """
+    show the path and contents of the prefs file used for `ec2 new`
+    """
+    path = shell.conf._pref_path(__file__)
+    print('path:', path, file=sys.stderr)
+    print()
+    with open(path) as f:
+        print(f.read())
 
 
 def main():

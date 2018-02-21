@@ -1,3 +1,4 @@
+import argh
 import copy
 import boto3
 import requests
@@ -644,7 +645,6 @@ def _wait_for_ssh(*instances, seconds=0):
     assert False, 'failed to wait for ssh'
 
 
-
 def untag(ls_tags, unset_tags, yes=False, first_n=None, last_n=None):
     assert '=' not in unset_tags, 'no "=", just the name of the tag to unset'
     instances = _ls(tuple(ls_tags.split(',')), 'all', first_n, last_n)
@@ -727,6 +727,37 @@ def _has_wildcard_permission(sg, ip):
 
 def _wildcard_security_groups(ip):
     return [sg for sg in _sgs() if _has_wildcard_permission(sg, ip)]
+
+
+def sg(id):
+    sg = list(_resource().security_groups.filter(GroupIds=[id]))
+    assert len(sg) == 1, 'found more than 1 sg matching: %s\n\n %s' % (id, '\n '.join(sg))
+    sg = sg[0]
+    print('\nname = ' + sg.group_name, '\nid = ' + sg.group_id, '\ndescription = "' + sg.description + '"', file=sys.stderr)
+    lines = ['protocol port source description']
+    for sg_perm in sg.ip_permissions:
+        assert sg_perm.get('FromPort') == sg_perm.get('ToPort'), sg_perm
+        ips = sg_perm.get('IpRanges', [])
+        ips += sg_perm.get('Ipv6Ranges', [])
+        ips += sg_perm.get('UserIdGroupPairs', [])
+        ips += sg_perm.get('PrefixListIds', [])
+        for ip in ips:
+            protocol = sg_perm.get('IpProtocol', 'All')
+            if protocol == '-1':
+                protocol = 'All'
+            port = str(sg_perm.get('FromPort', 'All'))
+            if port == '-1':
+                port = 'All'
+            lines.append(' '.join([
+                protocol,
+                port,
+                str(ip.get('CidrIp') or ip.get('CidrIpv6') or ip.get('GroupId') or ip.get('PrefixListId')),
+                str(ip.get('Description', '')).replace(' ', '_'),
+            ]))
+    text = util.strings.indent(util.strings.align('\n'.join(lines)), 2)
+    lines = text.splitlines()
+    print(lines[0], file=sys.stderr)
+    print('\n'.join(lines[1:]))
 
 
 def sgs():
@@ -944,17 +975,20 @@ def keys():
         logging.info(key.name)
 
 
-def vpcs():
+@argh.arg('name_contains', nargs='?', default=None)
+def vpcs(name_contains, security_groups=False):
+    f = lambda x: util.strings.indent(util.strings.align(x), 4)
     for vpc in _resource().vpcs.all():
-        logging.info('%s %s %s %s',
-                     _name(vpc),
-                     vpc.id,
-                     vpc.cidr_block,
-                     '\n ' + '\n '.join(sorted([' '.join([x.availability_zone,
-                                                          x.cidr_block,
-                                                          x.id])
-                                                for x in vpc.subnets.all()])))
-        logging.info('')
+        if not name_contains or name_contains in _name(vpc):
+            print(_name(vpc),
+                  vpc.id,
+                  vpc.cidr_block,
+                  ''
+                  + ('\n  security groups:\n' + f('\n'.join(sorted([' '.join([grp.group_name, grp.group_id]) for grp in vpc.security_groups.all()])))
+                     if security_groups else
+                     '')
+                  + '\n  subnets:\n' + f('\n'.join(sorted([' '.join([x.availability_zone, x.cidr_block, x.id]) for x in vpc.subnets.all()]))))
+            print()
 
 
 def _subnet(vpc, zone):

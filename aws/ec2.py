@@ -987,7 +987,7 @@ def vpcs(name_contains, security_groups=False):
                   + ('\n  security groups:\n' + f('\n'.join(sorted([' '.join([grp.group_name, grp.group_id]) for grp in vpc.security_groups.all()])))
                      if security_groups else
                      '')
-                  + '\n  subnets:\n' + f('\n'.join(sorted([' '.join([x.availability_zone, x.cidr_block, x.id]) for x in vpc.subnets.all()]))))
+                  + '\n  subnets:\n' + f('\n'.join(sorted([' '.join([_name(x), x.availability_zone, x.cidr_block, x.id]) for x in vpc.subnets.all()]))))
             print()
 
 

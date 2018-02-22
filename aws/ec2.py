@@ -95,12 +95,13 @@ def _ls(tags, state='running', first_n=None, last_n=None):
             assert s in ['running', 'pending', 'stopped', 'terminated', 'all'], 'no such state: ' + s
     is_dns_name = tags and tags[0].endswith('.amazonaws.com')
     is_vpc_id = tags and tags[0].startswith('vpc-')
+    is_subnet_id = tags and tags[0].startswith('subnet-')
     is_sg_id = tags and tags[0].startswith('sg-')
     is_priv_dns_name = tags and tags[0].endswith('.ec2.internal')
     is_ipv4 = tags and all(x.isdigit() or x == '.' for x in tags[0])
     is_priv_ipv4 = tags and all(x.isdigit() or x == '.' for x in tags[0]) and tags[0].startswith('10.')
     is_instance_id = tags and re.search(r'i\-[a-zA-Z0-9]{8}', tags[0])
-    if tags and not is_vpc_id and not is_dns_name and not is_sg_id and not is_instance_id and not is_ipv4 and not is_priv_ipv4 and not is_priv_dns_name and '=' not in tags[0]:
+    if tags and not is_subnet_id and not is_vpc_id and not is_dns_name and not is_sg_id and not is_instance_id and not is_ipv4 and not is_priv_ipv4 and not is_priv_dns_name and '=' not in tags[0]:
         tags = ('Name=%s' % tags[0],) + tuple(tags[1:])
     instances = []
     if not tags:
@@ -117,6 +118,9 @@ def _ls(tags, state='running', first_n=None, last_n=None):
                 instances += list(_resource().instances.filter(Filters=filters))
             elif is_vpc_id:
                 filters += [{'Name': 'vpc-id', 'Values': tags_chunk}]
+                instances += list(_resource().instances.filter(Filters=filters))
+            elif is_subnet_id:
+                filters += [{'Name': 'subnet-id', 'Values': tags_chunk}]
                 instances += list(_resource().instances.filter(Filters=filters))
             elif is_priv_ipv4:
                 filters += [{'Name': 'private-ip-address', 'Values': tags_chunk}]
@@ -989,6 +993,12 @@ def vpcs(name_contains, security_groups=False):
                      '')
                   + '\n  subnets:\n' + f('\n'.join(sorted([' '.join([_name(x), x.availability_zone, x.cidr_block, x.id]) for x in vpc.subnets.all()]))))
             print()
+
+
+def vpc_id(name_contains):
+    for vpc in _resource().vpcs.all():
+        if not name_contains or name_contains in _name(vpc):
+            print(vpc.id)
 
 
 def _subnet(vpc, zone):

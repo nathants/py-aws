@@ -187,7 +187,6 @@ def _pretty(instance, ip=False, all_tags=False):
             instance.instance_id,
             instance.image_id,
             ('spot' if instance.spot_instance_request_id else 'ondemand'),
-            instance.placement['AvailabilityZone'],
             (instance.public_dns_name or '<no-ip>' if ip else None),
             ','.join([x['GroupName'] for x in instance.security_groups]),
             ' '.join('%s=%s' % (k, v)
@@ -210,6 +209,17 @@ def id(*tags, first_n=None, last_n=None):
     vals = _ls(tags, 'running', first_n, last_n)
     vals = sorted(vals, key=lambda x: x.instance_id)
     vals = [i.instance_id for i in vals]
+    vals = [i.instance_id for i in vals]
+    if not vals:
+        sys.exit(1)
+    else:
+        return vals
+
+
+def subnet(*tags, first_n=None, last_n=None):
+    vals = _ls(tags, 'running', first_n, last_n)
+    vals = sorted(vals, key=lambda x: x.instance_id)
+    vals = [' '.join([util.colors.green(_name(i)), i.instance_id, _name(i.subnet), i.subnet.id, i.subnet.availability_zone]) for i in vals]
     if not vals:
         sys.exit(1)
     else:
@@ -740,7 +750,6 @@ def sg(id):
     print('\nname = ' + sg.group_name, '\nid = ' + sg.group_id, '\ndescription = "' + sg.description + '"', file=sys.stderr)
     lines = ['protocol port source description']
     for sg_perm in sg.ip_permissions:
-        assert sg_perm.get('FromPort') == sg_perm.get('ToPort'), sg_perm
         ips = sg_perm.get('IpRanges', [])
         ips += sg_perm.get('Ipv6Ranges', [])
         ips += sg_perm.get('UserIdGroupPairs', [])
@@ -749,8 +758,11 @@ def sg(id):
             protocol = sg_perm.get('IpProtocol', 'All')
             if protocol == '-1':
                 protocol = 'All'
-            port = str(sg_perm.get('FromPort', 'All'))
-            if port == '-1':
+            if sg_perm.get('FromPort') != sg_perm.get('ToPort'):
+                port = '{}-{}'.format(sg_perm['FromPort'], sg_perm['ToPort'])
+            else:
+                port = str(sg_perm.get('FromPort', 'All'))
+            if port in ['-1', '0-65535']:
                 port = 'All'
             lines.append(' '.join([
                 protocol,
@@ -1282,8 +1294,6 @@ def new(name: 'name of the instance',
     if spot and zone is None:
         zone, _, = cheapest_zone(type, kind='vpc' if vpc else 'classic', days=spot_days)
     for _ in range(5):
-        if zone:
-            opts['Placement'] = {'AvailabilityZone': zone}
         if vpc:
             if subnet is not None:
                 opts['SubnetId'] = subnet
@@ -1291,7 +1301,7 @@ def new(name: 'name of the instance',
                 opts['SubnetId'] = _subnet(vpc, zone)
             logging.info('using vpc: %s', vpc)
         else:
-            logging.info('using ec2-classic')
+            assert False, 'ec2 classic no longer supported'
         if spot:
             spot_opts = _make_spot_opts(spot, opts, fleet_role)
             _spot_opts = copy.deepcopy(spot_opts)
@@ -1309,10 +1319,11 @@ def new(name: 'name of the instance',
         else:
             logging.info('create instances:\n' + pprint.pformat(util.dicts.drop(opts, ['UserData'])))
             instances = _resource().create_instances(**opts)
-        logging.info('instances:\n%s', '\n'.join([i.instance_id for i in instances]))
         if no_wait:
+            logging.info('instances:')
             return [i.instance_id for i in instances]
         else:
+            logging.info('instances:\n%s', '\n'.join([i.instance_id for i in instances]))
             try:
                 ready_ids = _wait_for_ssh(*instances, seconds=seconds_wait)
                 break

@@ -1014,7 +1014,7 @@ def vpc_id(name_contains):
 
 
 def _subnet(vpc, zone):
-    vpcs = list(_resource().vpcs.filter(Filters=[{'Name': 'tag:Name', 'Values': [vpc]}]))
+    vpcs = list(_resource().vpcs.filter(Filters=[{'Name': 'vpc-id' if vpc.startswith('vpc-') else 'tag:Name', 'Values': [vpc]}]))
     assert len(vpcs) == 1, 'no vpc named: %s' % vpc
     if zone:
         subnets = [x for x in vpcs[0].subnets.all() if x.availability_zone == zone]
@@ -1227,8 +1227,6 @@ def new(name: 'name of the instance',
         logging.info('bidding spot at: (spot * on-demand) %s * %s = %s', spot_percentage, ondemand_price, spot)
     num = int(num)
     assert not (spot and type == 't2.nano'), 'no spot pricing for t2.nano'
-    if vpc.lower() == 'none':
-        vpc = None
     assert not login or num == 1, util.colors.red('you asked to login, but you are starting more than one instance, so its not gonna happen')
     owner = shell.run('whoami')
     for tag in tags:
@@ -1292,16 +1290,14 @@ def new(name: 'name of the instance',
     # the good ones, and start over for only as many new ones as we
     # need to fulfill the originally requested number.
     if spot and zone is None:
-        zone, _, = cheapest_zone(type, kind='vpc' if vpc else 'classic', days=spot_days)
+        zone, _, = cheapest_zone(type, days=spot_days)
     for _ in range(5):
-        if vpc:
-            if subnet is not None:
-                opts['SubnetId'] = subnet
-            else:
-                opts['SubnetId'] = _subnet(vpc, zone)
-            logging.info('using vpc: %s', vpc)
+        assert vpc or subnet, 'need to provide a --vpc or --subnet'
+        if subnet is not None:
+            opts['SubnetId'] = subnet
         else:
-            assert False, 'ec2 classic no longer supported'
+            opts['SubnetId'] = _subnet(vpc, zone)
+        logging.info('using vpc: %s', vpc)
         if spot:
             spot_opts = _make_spot_opts(spot, opts, fleet_role)
             _spot_opts = copy.deepcopy(spot_opts)
@@ -1366,13 +1362,6 @@ def zones():
     return [x['ZoneName'] for x in _client().describe_availability_zones()['AvailabilityZones']]
 
 
-_kinds = {'classic': 'Linux/UNIX',
-          'vpc': 'Linux/UNIX (Amazon VPC)'}
-
-
-_kinds_reverse = {v: k for k, v in _kinds.items()}
-
-
 def _chunk_by_day(days=7):
     now_end = datetime.datetime.utcnow().replace(second=0, microsecond=0)
     now_start = now_end.replace(hour=0, minute=0)
@@ -1385,13 +1374,13 @@ def _chunk_by_day(days=7):
     yield [f(now_start), f(now_end)]
 
 
-def _spot_price_cache_path(type, kind, start, end):
+def _spot_price_cache_path(type, start, end):
     start = start.split('T')[0]
     end = end.split('T')[0]
-    return '/tmp/cache.py-aws.spot-price.%(type)s.%(kind)s.%(start)s.%(end)s.json' % locals()
+    return '/tmp/cache.py-aws.spot-price.%(type)s.%(start)s.%(end)s.json' % locals()
 
 
-def _spot_price_history(type, kind, days=7):
+def _spot_price_history(type, days=7):
     # TODO this could be more clever. currently, it only reads cached
     # data if the oldests requested day is already cached, otherwise
     # it refetches everything. this is simpler, but more ideal would
@@ -1405,12 +1394,11 @@ def _spot_price_history(type, kind, days=7):
     # faster by gather all zone data in a single request cycle,
     # instead of separate cycles.
     # https://github.com/nathants/py-aws/blob/83bf766/aws/ec2.py#L1040
-    assert kind in _kinds
     dates = list(_chunk_by_day(days))
     cacheable_dates = dates[:-1] # everything but the latest is a 24hr period
     cached_dates = []
     for start, end in cacheable_dates:
-        if os.path.exists(_spot_price_cache_path(type, kind, start, end)):
+        if os.path.exists(_spot_price_cache_path(type, start, end)):
             cached_dates.append([start, end])
         else:
             break
@@ -1427,8 +1415,8 @@ def _spot_price_history(type, kind, days=7):
     cached_data = []
     for start, end in cached_dates:
         try:
-            logging.debug('read cached data for %s %s %s %s', type, kind, start, end)
-            with open(_spot_price_cache_path(type, kind, start, end)) as f:
+            logging.debug('read cached data for %s %s %s', type, start, end)
+            with open(_spot_price_cache_path(type, start, end)) as f:
                 cached_data.extend(json.load(f))
         except (IOError, ValueError):
             logging.debug('failed to load spot price cache, refetching everything')
@@ -1437,24 +1425,24 @@ def _spot_price_history(type, kind, days=7):
             break
     start = uncached_dates[0][0]
     end = uncached_dates[-1][1]
-    data = list(_get_spot_price(type, kind, start, end))
+    data = list(_get_spot_price(type, start, end))
     for k, v in util.iter.groupby(data, lambda x: x['date'].split('T')[0]):
         start = datetime.datetime.strptime(k, "%Y-%m-%d")
         end = (start + datetime.timedelta(days=1)).isoformat() + 'Z'
         start = start.isoformat() + 'Z'
         if any([start, end] == x for x in cacheable_dates) and not any([start, end] == x for x in cached_dates):
-            with open(_spot_price_cache_path(type, kind, start, end), 'w') as f:
+            with open(_spot_price_cache_path(type, start, end), 'w') as f:
                 json.dump(v, f)
-            logging.debug('write cache data for %s %s %s %s', type, kind, start, end)
+            logging.debug('write cache data for %s %s %s', type, start, end)
     # TODO add some cache data gc. cleanup say, older than 90 days?
     # files aren't that big, but boxes that dont reboot will
     # eventually will /tmp.
     return cached_data + data
 
 
-def _get_spot_price(type, kind, start, end):
+def _get_spot_price(type, start, end):
     token = ''
-    logging.info('get spot prices: %s %s from %s to %s', type, kind, start, end)
+    logging.info('get spot prices: %s from %s to %s', type, start, end)
     assert start < end
     total = 0
     while True:
@@ -1463,7 +1451,7 @@ def _get_spot_price(type, kind, start, end):
             StartTime=start,
             EndTime=end,
             InstanceTypes=[type],
-            ProductDescriptions=[_kinds[kind]])
+            ProductDescriptions=['Linux/UNIX (Amazon VPC)'])
         result = [{'zone': x['AvailabilityZone'],
                    'price': x['SpotPrice'],
                    'date': x['Timestamp'].isoformat().split('+')[0] + 'Z'}
@@ -1477,10 +1465,8 @@ def _get_spot_price(type, kind, start, end):
             break
 
 
-def max_spot_price(type, kind: 'classic|vpc' = 'classic', days=7):
-    if type.split('.')[0] in ['i3', 'm4', 'c4', 'r4', 'x1', 't2', 'm5', 'c5']:
-        kind = 'vpc'
-    vals = _spot_price_history(type, kind, days)
+def max_spot_price(type, days=7):
+    vals = _spot_price_history(type, days)
     results = []
     for zone, xs in util.iter.groupby(vals, lambda x: x['zone']):
         if zone.startswith(_current_region()):
@@ -1489,8 +1475,8 @@ def max_spot_price(type, kind: 'classic|vpc' = 'classic', days=7):
     return [' '.join(x) for x in results]
 
 
-def cheapest_zone(type, kind: 'classic | vpc' = 'classic', days=7):
-    zone, price = max_spot_price(type, kind, days)[0].split()
+def cheapest_zone(type, days=7):
+    zone, price = max_spot_price(type, days)[0].split()
     logging.info('cheapest spot price: %s for zone %s', price, zone)
     return [zone, price]
 
@@ -1764,11 +1750,9 @@ def scheduled_events():
 
 
 def reserved_usage():
-    # note: assumes all m1, m2, m3 et all are in ec2 classic, and all m4 et all are in vpc.
     reserved = _client().describe_reserved_instances(Filters=[{'Name': 'state', 'Values': ['active']}])['ReservedInstances']
     assert all(x['Scope'] == 'Region' for x in reserved), 'only scope=region supported'
-    reserved = [{'kind': _kinds_reverse[x['ProductDescription']],
-                 'type': x['InstanceType'],
+    reserved = [{'type': x['InstanceType'],
                  'num': x['InstanceCount']}
                 for x in reserved]
     reserved = collections.Counter(x['type'] for x in reserved for _ in range(x['num']))
@@ -1970,18 +1954,23 @@ def new_vpc(name, *tags, xx=0, description=None):
     ig = _resource().create_internet_gateway()
     _retry(ig.create_tags)(Tags=tags)
     _retry(vpc.attach_internet_gateway)(InternetGatewayId=ig.id)
-    main_route_table = list(vpc.route_tables.all())[0]
-    main_route_table.create_route(DestinationCidrBlock='0.0.0.0/0', GatewayId=ig.id)
-    _retry(main_route_table.create_tags)(Tags=tags)
+    route_table = list(vpc.route_tables.all())[0]
+    route_table.create_route(DestinationCidrBlock='0.0.0.0/0', GatewayId=ig.id)
+    _retry(route_table.create_tags)(Tags=tags)
     for i, zone in enumerate(zones()):
         block = '.'.join(cidr.split('/')[0].split('.')[:2] + [str(16 * i + 1), '0/20'])
         logging.info('zone: %s block: %s', zone, block)
         subnet = _resource().create_subnet(CidrBlock=block, VpcId=vpc.id, AvailabilityZone=zone)
-        _retry(_client().create_tags)(Resources=[subnet.id], Tags=tags)
+        _tags = copy.deepcopy(tags)
+        for tag in _tags:
+            if tag['Key'] == 'Name':
+                tag['Value'] += '-subnet-' + zone[-1]
+        _retry(_client().create_tags)(Resources=[subnet.id], Tags=_tags)
         _retry(_client().modify_subnet_attribute)(SubnetId=subnet.id, MapPublicIpOnLaunch={'Value': True})
-        _retry(_client().associate_route_table)(RouteTableId=main_route_table.route_table_id, SubnetId=subnet.id)
+        _retry(_client().associate_route_table)(RouteTableId=route_table.route_table_id, SubnetId=subnet.id)
     sg = _resource().create_security_group(GroupName=name, Description=description or name, VpcId=vpc.id)
     _retry(sg.create_tags)(Tags=tags)
+    return vpc.id
 
 
 def conf():

@@ -134,8 +134,6 @@ def _ls(tags, state='running', first_n=None, last_n=None):
             elif is_sg_id:
                 filters += [{'Name': 'instance.group-id', 'Values': tags_chunk}] # ec2 modern
                 instances += list(_resource().instances.filter(Filters=filters))
-            elif any('*' in tag for tag in tags_chunk):
-                instances += [i for i in _resource().instances.filter(Filters=filters) if _matches(i, tags_chunk)]
             else:
                 filters += [{'Name': 'tag:%s' % name, 'Values': [value]}
                             for tag in tags_chunk
@@ -148,27 +146,6 @@ def _ls(tags, state='running', first_n=None, last_n=None):
     elif last_n:
         instances = instances[-int(last_n):]
     return instances
-
-
-def _matches(instance, tags):
-    for tag in tags:
-        assert '=' in tag, 'tags are specified as "<key>=<value>", not: %s' % tag
-        k, v = tag.split('=')
-        t = _tags(instance).get(k, '').lower()
-        v = v.lower()
-        if v[0] == v[-1] == '*':
-            if v.strip('*') not in t:
-                return False
-        elif v[0] == '*':
-            if not t.endswith(v.strip('*')):
-                return False
-        elif v[-1] == '*':
-            if not t.startswith(v.strip('*')):
-                return False
-        else:
-            if t != v:
-                return False
-    return True
 
 
 def _pretty(instance, ip=False, all_tags=False):

@@ -209,7 +209,6 @@ def id(*tags, first_n=None, last_n=None):
     vals = _ls(tags, 'running', first_n, last_n)
     vals = sorted(vals, key=lambda x: x.instance_id)
     vals = [i.instance_id for i in vals]
-    vals = [i.instance_id for i in vals]
     if not vals:
         sys.exit(1)
     else:

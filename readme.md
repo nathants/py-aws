@@ -1,6 +1,6 @@
 ## why
 
-the aws ec2 cli is much too verbose for [sane](https://github.com/nathants/bootstraps/blob/master/scripts/spark_cluster.py) [scripting](https://github.com/nathants/bootstraps/blob/master/scripts/cassandra_cluster.sh).
+the aws ec2 cli is much too verbose for [sane](https://github.com/nathants/bootstraps/tree/ef84c9f1c3f3f19fa67ef9689eb991f18f241585/scripts/spark_cluster.py) [scripting](https://github.com/nathants/bootstraps/tree/ef84c9f1c3f3f19fa67ef9689eb991f18f241585/scripts/cassandra_cluster.sh).
 
 ## what
 

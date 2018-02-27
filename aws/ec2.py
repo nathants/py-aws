@@ -276,6 +276,7 @@ def ssh(
     # tty means that when you ^C to exit, the remote processes are killed. this is usually what you want, ie no lingering `tail -f` instances.
     # no_tty is the opposite, which is good for backgrounding processes, for example: `ec2 ssh $host -nyc 'bash cmd.sh </dev/null &>cmd.log &'
     # TODO backgrounding appears to succeed, but ec2 ssh never exits, when targeting more than 1 host?
+    pool.thread._size = max_threads
     assert tags, 'you must specify some tags'
     if hasattr(tags[0], 'instance_id'):
         instances = tags
@@ -337,7 +338,7 @@ def ssh(
                     if not quiet:
                         logging.info(msg)
                 return fn
-            pool.thread.wait(*map(run, instances), max_threads=max_threads)
+            pool.thread.wait(*map(run, instances))
             # TODO would be really nice to see these results, plus unknowns:, when ^C to exit early
             if not quiet:
                 logging.info('\nresults:')
@@ -374,7 +375,7 @@ def _make_callback(instance, quiet, append=None, no_stream=False):
     return f
 
 
-def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None):
+def scp(src, dst, *tags, yes=False, first_n=None, last_n=None):
     assert tags, 'you must specify some tags'
     assert ':' in src + dst, 'you didnt specify a remote path, which starts with ":"'
     instances = _ls(tags, 'running', first_n=first_n, last_n=last_n)
@@ -407,7 +408,7 @@ def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None):
         return fn
     failures = []
     successes = []
-    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors) if len(instances) > 1 else [False]), max_threads=max_threads)
+    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors) if len(instances) > 1 else [False]))
     logging.info('\nresults:')
     for msg in successes + failures:
         logging.info(' ' + msg)
@@ -417,7 +418,8 @@ def scp(src, dst, *tags, yes=False, max_threads=0, first_n=None, last_n=None):
 
 # TODO when one instance only, dont colorize
 # TODO stop using bash -s
-def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_threads=0):
+def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_threads=20):
+    pool.thread._size = max_threads
     assert tags, 'you must specify some tags'
     instances = _ls(tags, 'running', first_n, last_n)
     assert instances, 'didnt find instances:\n%s' % ('\n'.join(_pretty(i) for i in instances) or '<nothing>')
@@ -450,7 +452,7 @@ def push(src, dst, *tags, first_n=None, last_n=None, name=None, yes=False, max_t
             else:
                 successes.append(util.colors.green('success: ') + instance.public_dns_name)
         return fn
-    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors) if len(instances) > 1 else [False]), max_threads=max_threads)
+    pool.thread.wait(*map(run, instances, itertools.cycle(util.colors._colors) if len(instances) > 1 else [False]))
     shell.check_call('rm -rf', os.path.dirname(script))
     logging.info('\nresults:')
     for msg in successes + failures:

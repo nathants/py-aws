@@ -719,9 +719,11 @@ def _wildcard_security_groups(ip):
     return [sg for sg in _sgs() if _has_wildcard_permission(sg, ip)]
 
 
-def sg(id):
-    sg = list(_resource().security_groups.filter(GroupIds=[id]))
-    assert len(sg) == 1, 'found more than 1 sg matching: %s\n\n %s' % (id, '\n '.join(sg))
+def sg(name_or_id):
+    if not name_or_id.startswith('sg-'):
+        name_or_id = sg_id(name_or_id)
+    sg = list(_resource().security_groups.filter(GroupIds=[name_or_id]))
+    assert len(sg) == 1, 'found more than 1 sg matching: %s\n\n %s' % (name_or_id, '\n '.join(sg))
     sg = sg[0]
     print('\nname = ' + sg.group_name, '\nid = ' + sg.group_id, '\ndescription = "' + sg.description + '"', file=sys.stderr)
     lines = ['protocol port source description']

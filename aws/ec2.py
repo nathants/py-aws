@@ -938,8 +938,9 @@ def amis(name, *tags, id_only=False, most_recent=False):
 
 
 # TODO something better
-ubuntus = {'xenial', 'trusty'}
-ubuntus_hvm_ssd = {'xenial': 'ubuntu/images/hvm-ssd/ubuntu-xenial-16.04-amd64-server',
+ubuntus = {'bionic', 'xenial', 'trusty'}
+ubuntus_hvm_ssd = {'bionic': 'ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server',
+                   'xenial': 'ubuntu/images/hvm-ssd/ubuntu-xenial-16.04-amd64-server',
                    'trusty': 'ubuntu/images/hvm-ssd/ubuntu-trusty-14.04-amd64-server'}
 ubuntus_pv = {'xenial': 'ubuntu/images/ebs-ssd/ubuntu-xenial-16.04-amd64-server',
               'trusty': 'ubuntu/images/ebs-ssd/ubuntu-trusty-14.04-amd64-server'}

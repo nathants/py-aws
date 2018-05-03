@@ -721,13 +721,14 @@ def _wildcard_security_groups(ip):
     return [sg for sg in _sgs() if _has_wildcard_permission(sg, ip)]
 
 
-def sg(name_or_id):
+def sg(name_or_id, quiet=False):
     if not name_or_id.startswith('sg-'):
         name_or_id = sg_id(name_or_id)
     sg = list(_resource().security_groups.filter(GroupIds=[name_or_id]))
     assert len(sg) == 1, 'found more than 1 sg matching: %s\n\n %s' % (name_or_id, '\n '.join(sg))
     sg = sg[0]
-    print('\nname = ' + sg.group_name, '\nid = ' + sg.group_id, '\ndescription = "' + sg.description + '"', file=sys.stderr)
+    if not quiet:
+        print('\nname = ' + sg.group_name, '\nid = ' + sg.group_id, '\ndescription = "' + sg.description + '"', file=sys.stderr)
     lines = ['protocol port source description']
     for sg_perm in sg.ip_permissions:
         ips = sg_perm.get('IpRanges', [])
@@ -750,10 +751,9 @@ def sg(name_or_id):
                 str(ip.get('CidrIp') or ip.get('CidrIpv6') or ip.get('GroupId') or ip.get('PrefixListId')),
                 str(ip.get('Description', '')).replace(' ', '_'),
             ]))
-    text = util.strings.indent(util.strings.align('\n'.join(lines)), 2)
-    lines = text.splitlines()
-    print(lines[0], file=sys.stderr)
-    print('\n'.join(lines[1:]))
+    if not quiet:
+        print('\n' + lines[0] + '\n', file=sys.stderr)
+    return util.strings.align('\n'.join(lines[1:]))
 
 
 def sgs():
@@ -973,18 +973,24 @@ def keys():
 
 
 @argh.arg('name_contains', nargs='?', default=None)
-def vpcs(name_contains, security_groups=False):
-    f = lambda x: util.strings.indent(util.strings.align(x), 4)
+def vpcs(name_contains, security_groups=False, routes=False, subnets=False, nacls=False):
+    indent = lambda y, x: util.strings.indent(x, y)
+    align = lambda y, x: util.strings.indent(util.strings.align(x), y)
+    fmt_route = lambda x: x.get('Origin', '<origin>') + ' ' + x.get('DestinationCidrBlock', x.get('DestinationPrefixListId', '<destination>')) + ' ' + x.get('GatewayId', x.get('NatGatewayId', '<gateway>'))
+    fmt_nacl = lambda x:  (f'#{x["RuleNumber"]} {x["RuleAction"]} '
+                           + x['CidrBlock'] + ' ' + ('Egress' if x['Egress'] else 'Ingress') + ' ' + {'-1': 'All', '6': 'TCP', '17': 'UDP'}[x['Protocol']] + ' '
+                           + (f"x['PortRange']['From']-x['PortRange']['To']" if 'PortRange' in x and x['PortRange']['From'] != x['PortRange']['To'] else str(x['PortRange']['From']) if 'PortRange' in x else '-'))
     for vpc in _resource().vpcs.all():
         if not name_contains or name_contains in _name(vpc):
             print(_name(vpc),
                   vpc.id,
                   vpc.cidr_block,
                   ''
-                  + ('\n  security groups:\n' + f('\n'.join(sorted([' '.join([grp.group_name, grp.group_id]) for grp in vpc.security_groups.all()])))
-                     if security_groups else
-                     '')
-                  + '\n  subnets:\n' + f('\n'.join(sorted([' '.join([_name(x), x.availability_zone, x.cidr_block, x.id]) for x in vpc.subnets.all()]))))
+                  + ('\n\n  nacls:\n' + '\n'.join(['    ' + x.id + align(6, '\n' + '\n '.join(fmt_nacl(y) for y in x.entries)) for x in vpc.network_acls.all()]) if nacls else '')
+                  + ('\n\n  routes:\n' + '\n'.join(['    ' + x.id + align(6, '\n' + '\n '.join(fmt_route(r) for r in x.routes_attribute)) for x in vpc.route_tables.all()]) if routes else '')
+                  + ('\n\n  security groups:\n' + indent(4, '\n'.join([' '.join([grp.group_name, grp.group_id, '\n' + align(2, sg(grp.group_id, quiet=True))]) for grp in vpc.security_groups.all()])) if security_groups else '')
+                  + ('\n\n  subnets:\n' + align(4, '\n'.join(sorted([' '.join([_name(x), x.availability_zone, x.cidr_block, x.id]) for x in vpc.subnets.all()]))) if subnets else '')
+                  )
             print()
 
 

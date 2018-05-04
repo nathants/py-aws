@@ -973,7 +973,8 @@ def keys():
 
 
 @argh.arg('name_contains', nargs='?', default=None)
-def vpcs(name_contains, security_groups=False, routes=False, subnets=False, nacls=False):
+@argh.arg('-n', '--nacls')
+def vpcs(name_contains, security_groups=False, routes=False, nacls=False):
     indent = lambda y, x: util.strings.indent(x, y)
     align = lambda y, x: util.strings.indent(util.strings.align(x), y)
     fmt_route = lambda x: x.get('Origin', '<origin>') + ' ' + x.get('DestinationCidrBlock', x.get('DestinationPrefixListId', '<destination>')) + ' ' + x.get('GatewayId', x.get('NatGatewayId', '<gateway>'))
@@ -989,7 +990,7 @@ def vpcs(name_contains, security_groups=False, routes=False, subnets=False, nacl
                   + ('\n\n  nacls:\n' + '\n'.join(['    ' + x.id + align(6, '\n' + '\n '.join(fmt_nacl(y) for y in x.entries)) for x in vpc.network_acls.all()]) if nacls else '')
                   + ('\n\n  routes:\n' + '\n'.join(['    ' + x.id + align(6, '\n' + '\n '.join(fmt_route(r) for r in x.routes_attribute)) for x in vpc.route_tables.all()]) if routes else '')
                   + ('\n\n  security groups:\n' + indent(4, '\n'.join([' '.join([grp.group_name, grp.group_id, '\n' + align(2, sg(grp.group_id, quiet=True))]) for grp in vpc.security_groups.all()])) if security_groups else '')
-                  + ('\n\n  subnets:\n' + align(4, '\n'.join(sorted([' '.join([_name(x), x.availability_zone, x.cidr_block, x.id]) for x in vpc.subnets.all()]))) if subnets else '')
+                  + ('\n\n  subnets:\n' + align(4, '\n'.join(sorted([' '.join([_name(x), x.availability_zone, x.cidr_block, x.id]) for x in vpc.subnets.all()]))) if True else '')
                   )
             print()
 
@@ -1938,11 +1939,11 @@ def new_vpc(name, *tags, xx=0, description=None):
     _retry(vpc.create_tags)(Tags=tags)
     vpc.wait_until_available()
     _retry(vpc.modify_attribute)(EnableDnsHostnames={'Value': True})
-    ig = _resource().create_internet_gateway()
-    _retry(ig.create_tags)(Tags=tags)
-    _retry(vpc.attach_internet_gateway)(InternetGatewayId=ig.id)
+    gateway = _resource().create_internet_gateway()
+    _retry(gateway.create_tags)(Tags=tags)
+    _retry(vpc.attach_internet_gateway)(InternetGatewayId=gateway.id)
     route_table = list(vpc.route_tables.all())[0]
-    route_table.create_route(DestinationCidrBlock='0.0.0.0/0', GatewayId=ig.id)
+    route_table.create_route(DestinationCidrBlock='0.0.0.0/0', GatewayId=gateway.id)
     _retry(route_table.create_tags)(Tags=tags)
     for i, zone in enumerate(zones()):
         block = '.'.join(cidr.split('/')[0].split('.')[:2] + [str(16 * i + 1), '0/20'])
@@ -1958,6 +1959,48 @@ def new_vpc(name, *tags, xx=0, description=None):
     sg = _resource().create_security_group(GroupName=name, Description=description or name, VpcId=vpc.id)
     _retry(sg.create_tags)(Tags=tags)
     return vpc.id
+
+
+def rm_vpc(vpc_id):
+    vpc = _resource().Vpc(vpc_id)
+    for subnet in vpc.subnets.all():
+        instances = list(subnet.instances.all())
+        if instances:
+            print('error: there are ec2 instances in vpc:', vpc_id)
+            sys.exit(1)
+    for gateway in vpc.internet_gateways.all():
+        vpc.detach_internet_gateway(InternetGatewayId=gateway.id)
+        gateway.delete()
+        print('deleted:', gateway)
+    for route_table in vpc.route_tables.all():
+        for association in route_table.associations:
+            if not association.main:
+                association.delete()
+                print('deleted:', association)
+    endpoints = _client().describe_vpc_endpoints(Filters=[{'Name': 'vpc-id', 'Values': [vpc_id]}])['VpcEndpoints']
+    for endpoint in endpoints:
+        _client().delete_vpc_endpoints(VpcEndpointIds=[endpoint['VpcEndpointId']])
+        print('deleted:', endpoint)
+    for sg in vpc.security_groups.all():
+        if sg.group_name != 'default':
+            sg.delete()
+            print('deleted:', sg)
+    vpc_peers = _client().describe_vpc_peering_connections(Filters=[{'Name': 'requester-vpc-info.vpc-id', 'Values': [vpc_id]}])['VpcPeeringConnections']
+    for vpc_peer in vpc_peers:
+        _resource().VpcPeeringConnection(vpc_peer['VpcPeeringConnectionId']).delete()
+        print('deleted:', vpc_peer)
+    for nacl in vpc.network_acls.all():
+        if not nacl.is_default:
+            nacl.delete()
+            print('deleted:', nacl)
+    for subnet in vpc.subnets.all():
+        for interface in subnet.network_interfaces.all():
+            interface.delete()
+            print('deleted:', interface)
+        subnet.delete()
+        print('deleted:', subnet)
+    _client().delete_vpc(VpcId=vpc_id)
+    print('deleted:', vpc)
 
 
 def conf():

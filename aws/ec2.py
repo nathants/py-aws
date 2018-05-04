@@ -1961,8 +1961,12 @@ def new_vpc(name, *tags, xx=0, description=None):
     return vpc.id
 
 
-def rm_vpc(vpc_id):
+def rm_vpc(vpc_id, yes=False):
     vpc = _resource().Vpc(vpc_id)
+    print('going to delete:', _tags(vpc).get('Name', '<no-name>'), vpc_id)
+    if is_cli and not yes:
+        logging.info('\nwould you like to proceed? y/n\n')
+        assert pager.getch() == 'y', 'abort'
     for subnet in vpc.subnets.all():
         instances = list(subnet.instances.all())
         if instances:

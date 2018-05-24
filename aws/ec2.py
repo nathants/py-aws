@@ -1259,14 +1259,15 @@ def new(name: 'name of the instance',
     opts['SecurityGroupIds'] = [x.id for x in _sgs(names=[sg])]
     opts['InstanceType'] = type
     opts['BlockDeviceMappings'] = _blocks(gigs, gigs_st1, 'xvda' if user == 'ec2-user' else 'sda')
-    opts['TagSpecifications'] = [{'ResourceType': 'instance',
+    opts['TagSpecifications'] = [{'ResourceType': resource,
                                   'Tags': [{'Key': 'Name', 'Value': name},
                                            {'Key': 'owner', 'Value': owner},
                                            {'Key': 'ssh-user', 'Value': user},
                                            {'Key': 'creation-date', 'Value': _now()},
                                            {'Key': 'num', 'Value': str(num)}] + [{'Key': k, 'Value': v}
                                                                                  for tag in tags
-                                                                                 for k, v in [tag.split('=')]]}]
+                                                                                 for k, v in [tag.split('=')]]}
+                                 for resource in ['instance', 'volume']]
     if role:
         opts['IamInstanceProfile'] = {'Name': role}
     # TODO something like this, but a generator. when spinning up lots of

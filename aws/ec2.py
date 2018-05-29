@@ -1082,6 +1082,9 @@ def _make_spot_opts(spot, opts, fleet_role):
     spot_opts['TargetCapacity'] = opts['MaxCount']
     opts['SecurityGroups'] = [{'GroupId': x} for x in opts['SecurityGroupIds']]
     opts = util.dicts.drop(opts, ['MaxCount', 'MinCount', 'SecurityGroupIds'])
+    for tags in opts['TagSpecifications'].copy():
+        if tags['ResourceType'] == 'volume':
+            opts['TagSpecifications'].remove(tags) # volume tagging not supported with RequestSpotFleet
     if 'UserData' in opts:
         opts['UserData'] = util.strings.b64_encode(opts['UserData'])
     spot_opts['LaunchSpecifications'] = [opts]
@@ -1241,7 +1244,7 @@ def new(name: 'name of the instance',
         logging.info('fetch latest ami for: %s', ami)
         distro = ami
         images = ubuntus_pv if type.split('.')[0] in ['t1', 'm1'] else ubuntus_hvm_ssd
-        ami, _ = [x for x in amis_ubuntu() if images[distro] in x][0].split()
+        ami, _ = [x for x in amis_ubuntu(ami) if images[distro] in x][0].split()
         logging.info('using ami ubuntu:%s %s', distro, ami)
     elif ami.startswith('ami-'):
         ami = ami.strip()

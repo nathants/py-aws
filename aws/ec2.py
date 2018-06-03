@@ -495,7 +495,7 @@ def _tar_script(src, name, echo_only=False):
               'src=$(pwd)\n'
               'cd $(dirname $src)\n'
               "FILES=$(find -L $(basename $src) -type f %(name)s -o -type l %(name)s)\n"
-              'echo $FILES|tr " " "\\n"|grep -v \.git 1>&2\n'
+              'echo $FILES|tr " " "\\n"|grep -v \.git >&2\n'
               + ('' if echo_only else 'tar cfh - $FILES')) % locals()
     with shell.tempdir(cleanup=False):
         with open('script.sh', 'w') as f:
@@ -1776,7 +1776,7 @@ def _cmd(cmd, arg_num, worker_num):
     stderr = _stderr_file(arg_num, cmd)
     stdin = _stdin_file(arg_num, cmd)
     cmd_hash = stdin.split('.')[1]
-    return 'set +e; cat - > %(stdin)s; echo "%(cmd_hash)s: %(cmd)s" >> cmds.log; (echo "cat %(stdin)s | (%(_cmd)s)" 1>&2; cat %(stdin)s | (%(_cmd)s); echo exited: $? 1>&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
+    return 'set +e; cat - > %(stdin)s; echo "%(cmd_hash)s: %(cmd)s" >> cmds.log; (echo "cat %(stdin)s | (%(_cmd)s)" >&2; cat %(stdin)s | (%(_cmd)s); echo exited: $? >&2;) > %(stdout)s 2> %(stderr)s </dev/null &' % locals()
 
 
 # TODO should print an eta based on rate of args and total args

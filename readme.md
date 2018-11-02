@@ -1,4 +1,4 @@
-# NOTE: slowly being migrated/refactored to: [cli-aws](https://github.com/nathants/cli-aws)
+# NOTE: migrating to: [cli-aws](https://github.com/nathants/cli-aws)
 
 ## why
 

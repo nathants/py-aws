@@ -707,19 +707,17 @@ def reboot(*tags, yes=False, first_n=None, last_n=None):
     _client().reboot_instances(InstanceIds=[i.instance_id for i in instances])
 
 
-def _has_wildcard_permission(sg, ip):
+def _has_ssh_permission(sg, ip):
     assert '/' not in ip
     for sg_perm in sg.ip_permissions:
         with util.exceptions.ignore(KeyError):
-            all_ports = sg_perm['FromPort'] in [0, 1] and sg_perm['ToPort'] == 65535
+            ssh_port = sg_perm['FromPort'] == sg_perm['ToPort'] == 22
             matches_ip = any(x['CidrIp'] == ip + '/32' for x in sg_perm['IpRanges'])
-            if all_ports and matches_ip:
+            if ssh_port and matches_ip:
                 return True
 
-
-def _wildcard_security_groups(ip):
-    return [sg for sg in _sgs() if _has_wildcard_permission(sg, ip)]
-
+def _ssh_security_groups(ip):
+    return [sg for sg in _sgs() if _has_ssh_permission(sg, ip)]
 
 def sg(name_or_id, quiet=False):
     if not name_or_id.startswith('sg-'):
@@ -774,7 +772,7 @@ def sg_name(id):
 
 
 def auths(ip):
-    for sg in _wildcard_security_groups(ip):
+    for sg in _ssh_security_groups(ip):
         yield '%s [%s]' % (util.colors.green(sg.group_name), sg.group_id)
 
 
@@ -839,8 +837,8 @@ def authorize(ip, *names, yes=False):
             try:
                 sg.authorize_ingress(
                     IpProtocol=proto,
-                    FromPort=0,
-                    ToPort=65535,
+                    FromPort=22,
+                    ToPort=22,
                     CidrIp='%s/32' % ip
                 )
                 logging.info('authorized: %s %s %s', sg.group_name, sg.group_id, proto)
@@ -850,9 +848,9 @@ def authorize(ip, *names, yes=False):
 
 def deauthorize(ip, *names, yes=False):
     assert all(x == '.' or x.isdigit() for x in ip), 'bad ip: %s' % ip
-    sgs = _sgs(names) if names else _wildcard_security_groups(ip)
+    sgs = _sgs(names) if names else _ssh_security_groups(ip)
     assert sgs, 'didnt find any security groups'
-    logging.info('your ip %s is currently wildcarded to the following security groups:\n', util.colors.yellow(ip))
+    logging.info('your ip %s is currently allowed ssh to the following security groups:\n', util.colors.yellow(ip))
     for sg in sgs:
         logging.info(' %s [%s]', sg.group_name, sg.group_id)
     if is_cli and not yes:
@@ -863,8 +861,8 @@ def deauthorize(ip, *names, yes=False):
             try:
                 sg.revoke_ingress(
                     IpProtocol=proto,
-                    FromPort=0,
-                    ToPort=65535,
+                    FromPort=22,
+                    ToPort=22,
                     CidrIp='%s/32' % ip
                 )
                 logging.info('revoked: %s %s %s', sg.group_name, sg.group_id, proto)

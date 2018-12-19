@@ -36,6 +36,8 @@ def test_basic():
         with open('foo/stdin.txt') as f:
             assert f.read() == "asdf\n"
 
+# TODO update to current s4 test spec
+
 def test_cp_s3_to_s3():
     run('echo asdf |', preamble, 'cp - s3://bucket/s3_to_s3/a.txt')
     run(preamble, 'cp s3://bucket/s3_to_s3/a.txt s3://bucket/s3_to_s3/b.txt')

@@ -196,8 +196,9 @@ def new(name,
 
 
 def add_script(cluster_id, schema_file, script_file):
-    schema_path = 's3://shareablee-hive/tmp/scripts/%s' % uuid.uuid4()
-    script_path = 's3://shareablee-hive/tmp/scripts/%s' % uuid.uuid4()
+    bucket = os.environ['EMR_SCRIPT_BUCKET']
+    schema_path = 's3://%s/tmp/scripts/%s' % (bucket, uuid.uuid4())
+    script_path = 's3://%s/tmp/scripts/%s' % (bucket, uuid.uuid4())
     shell.run('aws s3 cp', schema_file, schema_path)
     shell.run('aws s3 cp', script_file, script_path)
     add_step(cluster_id, 'copy schema', 'aws', 's3', 'cp', schema_path, '/tmp/schema.hql')
